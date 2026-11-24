@@ -43,11 +43,13 @@ Secrets necessários no repositório (o Thiago cadastra; você não digita senha
 A sandbox do Claude Code não alcança a VPS por SSH direto; use o workflow (`gh workflow run deploy`) e
 acompanhe com `gh run watch`. A VPS também roda o bot "Gestor" (OpenClaw) — não mexer nele.
 
-## Pendências (em ordem)
-1. Thiago gera a chave Asaas `vexa-bot` (SMS) e cadastra os 3 secrets → disparar deploy com `SANDBOX=1`,
-   testar `/start` no Telegram, depois `SANDBOX=0`.
-2. Binance Pay exige conta **Merchant** (verificação da empresa). Já implementado: sem `BINANCE_API_KEY`
-   (e fora do SANDBOX) o botão USDT some e a loja opera só Pix + saldo.
-3. Cadastrar produtos reais (hoje só há catálogo de exemplo local, não versionado).
-4. Webhook Asaas/Binance no lugar do polling (opcional), entrega de arquivos (file_id), canal @vexashopping.
-5. Recomendar ao Thiago trocar a senha root da VPS (foi exposta em chat).
+## Pendências (em ordem) — atualizado 24/11/2026 20h52
+1. Repo está **público** temporariamente (minutos grátis do Actions acabaram; orçamento de Actions = US$ 0).
+   Ao terminar o projeto, voltar para **privado** (Settings → Change visibility).
+2. Secrets: `VPS_HOST` já cadastrado. Thiago cadastra `VPS_PASSWORD` e `ENV_FILE` (ele tem o conteúdo).
+   Depois: `gh workflow run deploy` → acompanhar → `/start` no @vexashopping_bot. `ENV_FILE` já vem com `SANDBOX=0`.
+3. Chave Asaas `vexa-bot` gerada e validada (conta Asaas é Pessoa Física, CPF). Sem permissão de saque.
+4. Binance Pay exige conta **Merchant**. Sem `BINANCE_API_KEY` (e fora do SANDBOX) o botão USDT some — loja opera só Pix + saldo.
+5. Cadastrar produtos reais pelo painel admin (catálogo de exemplo era só local).
+6. Opcional: webhook Asaas no lugar do polling, entrega de arquivos (file_id), canal @vexashopping.
+7. Lembrar o Thiago de trocar a senha root da VPS (foi exposta em chat).
