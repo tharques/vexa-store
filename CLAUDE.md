@@ -1,4 +1,4 @@
-# NEXO STORE — instruções para o Claude Code
+# VEXA — instruções para o Claude Code
 
 Bot de vendas de produtos digitais no Telegram, pagamento Binance Pay (Merchant API), entrega automática.
 
