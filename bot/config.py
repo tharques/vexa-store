@@ -5,9 +5,9 @@ load_dotenv()
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
-STORE_NAME = os.getenv("STORE_NAME", "VEXA")
-SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "vexastore_suporte")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # ex: @vexastore (avisos de venda/estoque)
+STORE_NAME = os.getenv("STORE_NAME", "VEXA SHOPPING")
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "vexashopping_suporte")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # ex: @vexashopping (avisos de venda/estoque)
 DB_PATH = os.getenv("DB_PATH", "data/store.db")
 
 # Binance Pay (Merchant) - https://merchant.binance.com

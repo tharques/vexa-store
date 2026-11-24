@@ -1,4 +1,4 @@
-# ◆ VEXA — comprou, chegou.
+# ◆ VEXA SHOPPING — comprou, chegou.
 
 Loja automática no Telegram: catálogo em botões, pagamento **Binance Pay**, confirmação e **entrega automática**, carteira com saldo, garantia/tickets e painel admin por comandos.
 
