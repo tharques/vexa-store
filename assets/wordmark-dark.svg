@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 400"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#635BFF"/><stop offset=".6" stop-color="#8A5CFF"/><stop offset="1" stop-color="#FF6BB5"/></linearGradient></defs>
+<rect width="1400" height="400" fill="#0A2540"/>
+<g transform="translate(110,95) scale(.41)"><rect width="512" height="512" rx="112" fill="url(#g)"/><path d="M150 150 H222 L292 362 H220 Z" fill="#fff"/><path d="M290 150 H362 L292 362 L256 254 Z" fill="#fff" fill-opacity=".62"/></g>
+<text x="370" y="232" font-family="Inter" font-weight="800" font-size="150" letter-spacing="-7" fill="#FFFFFF">vexa</text>
+<text x="376" y="300" font-family="Inter" font-weight="600" font-size="34" letter-spacing="14" fill="#A5B4FC">SHOPPING</text>
+</svg>

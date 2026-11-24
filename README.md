@@ -2,7 +2,7 @@
 
 Loja automática no Telegram: catálogo em botões, pagamento **Binance Pay**, confirmação e **entrega automática**, carteira com saldo, garantia/tickets e painel admin por comandos.
 
-<img src="assets/wordmark.png" width="480">
+<img src="assets/wordmark-light.png" width="480">
 
 ## Funções
 - 🛍 Catálogo com preço e estoque ao vivo (❌ quando esgota, ∞ para produtos digitais ilimitados)
