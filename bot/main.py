@@ -15,7 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BufferedInputFile, CallbackQuery, FSInputFile, InputMediaPhoto, Message)
 
 from . import asaas, binance_pay as bp
-from .config import (ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, ORDER_TIMEOUT_MIN, POLL_SECONDS, REF_BONUS_PCT,
+from .config import (BINANCE_API_KEY, SANDBOX, ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, ORDER_TIMEOUT_MIN, POLL_SECONDS, REF_BONUS_PCT,
                      STORE_NAME, SUPPORT_USERNAME)
 from .db import Repo, connect
 from .ui import LINE, b, back, bar, brl, header, home_kb, kb, level, stock_badge, usd
@@ -26,6 +26,7 @@ repo: Repo
 bot: Bot
 BANNERS = Path(__file__).resolve().parent.parent / "assets" / "banners"
 PAGE = 6
+USDT_ON = bool(BINANCE_API_KEY) or SANDBOX
 
 
 class S(StatesGroup):
@@ -196,7 +197,9 @@ async def checkout_view(target, state: FSMContext):
            f"◆ {p['name']}  ×{d['qty']}\n"
            f"Subtotal  {brl(sub)}\n" + (f"🎟 Cupom {d['coupon']}  −{brl(disc)}\n" if disc else "") +
            f"{LINE}\n<b>Total  {brl(total)}</b>\n<i>≈ {usd(usdt)}</i>\n\nEscolha a forma de pagamento:")
-    rows = [[b(f"⚡ Pix  ·  {brl(total)}", "pay:pix")], [b(f"🟡 USDT  ·  {usd(usdt)}", "pay:usdt")]]
+    rows = [[b(f"⚡ Pix  ·  {brl(total)}", "pay:pix")]]
+    if USDT_ON:
+        rows.append([b(f"🟡 USDT  ·  {usd(usdt)}", "pay:usdt")])
     if u["balance"] >= total:
         rows.append([b(f"👛 Saldo  ·  {brl(u['balance'])} disponível", "pay:bal")])
     rows.append([b("🎟 Tenho cupom", "cupom"), b("✖ Cancelar", f"p:{p['id']}:{d['qty']}")])
@@ -511,7 +514,7 @@ async def topup_go(cb: CallbackQuery, state: FSMContext):
     await state.set_data({"kind": "topup", "uid": cb.from_user.id, "total": v, "usdt": await bp.brl_to_usdt(v)})
     d = await state.get_data()
     await screen(cb, "checkout", f"{header('Recarga')}\n<b>{brl(v)}</b>  ≈ {usd(d['usdt'])}\n\nComo quer pagar?",
-                 kb([b("⚡ Pix", "pay:pix"), b("🟡 USDT", "pay:usdt")], back("topup")))
+                 kb([b("⚡ Pix", "pay:pix")] + ([b("🟡 USDT", "pay:usdt")] if USDT_ON else []), back("topup")))
 
 
 @router.callback_query(F.data == "orders")
