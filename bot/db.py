@@ -5,7 +5,7 @@ from .config import DB_PATH
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY, username TEXT, name TEXT, cpf TEXT, balance REAL DEFAULT 0,
-  spent REAL DEFAULT 0, ref_by INTEGER, banner_msg INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+  spent REAL DEFAULT 0, ref_by INTEGER, ref_earned REAL DEFAULT 0, banner_msg INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS categories(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, emoji TEXT DEFAULT '◆', sort INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS products(
@@ -33,6 +33,10 @@ async def connect():
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     await db.executescript(SCHEMA)
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN ref_earned REAL DEFAULT 0")
+    except Exception:
+        pass
     await db.commit()
     return db
 

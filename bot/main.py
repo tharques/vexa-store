@@ -79,13 +79,14 @@ async def user(u):
 
 # ───────────────────────── início ─────────────────────────
 async def home_caption(u):
-    (_, lvl, ico), _ = level(u["spent"])
-    first = (u["name"] or "").split(" ")[0] or "bem-vindo"
-    return (f"<b>Olá, {first}.</b> 👋\n"
-            f"Produtos digitais com entrega automática, 24 horas por dia.\n{LINE}\n"
-            f"👛 Saldo  <b>{brl(u['balance'])}</b>\n"
-            f"{ico} Nível  <b>{lvl}</b>\n{LINE}\n"
-            f"⚡ Pix  ·  🟡 USDT  ·  👛 Saldo\n<i>comprou, chegou.</i>")
+    (_, lvl, _), _ = level(u["spent"])
+    first = (u["name"] or "").split(" ")[0] or "cliente"
+    refs = (await repo.one("SELECT COUNT(*) n FROM users WHERE ref_by=?", u["id"]))["n"]
+    extra = f"\nIndicações  <b>{refs}</b>  ·  ganhos <b>{brl(u['ref_earned'])}</b>" if refs else ""
+    return (f"<b>Olá, {first}</b>\n\n"
+            f"Saldo  <b>{brl(u['balance'])}</b>\n"
+            f"Nível  <b>{lvl}</b>{extra}\n\n"
+            f"<i>Pix ou USDT · entrega automática em segundos</i>")
 
 
 @router.message(CommandStart())
@@ -450,9 +451,10 @@ async def deliver(oid):
     u = await repo.one("SELECT ref_by FROM users WHERE id=?", o["user_id"])
     if u["ref_by"]:
         bonus = round(o["amount"] * REF_BONUS_PCT / 100, 2)
-        await repo.x("UPDATE users SET balance=balance+? WHERE id=?", bonus, u["ref_by"])
+        await repo.x("UPDATE users SET balance=balance+?, ref_earned=ref_earned+? WHERE id=?", bonus, bonus, u["ref_by"])
         try:
-            await bot.send_message(u["ref_by"], f"🤝 Indicação: você ganhou <b>{brl(bonus)}</b> de saldo!")
+            await bot.send_message(u["ref_by"], f"<b>Comissão recebida</b>\n+{brl(bonus)} de saldo por uma compra do seu indicado.",
+                                   reply_markup=kb([b("Ver minha conta", "me")]))
         except Exception:
             pass
     body = "\n".join(f"<code>{i}</code>" for i in items)
@@ -495,10 +497,10 @@ async def me(cb: CallbackQuery):
     u = await user(cb.from_user)
     (mn, lvl, ico), nxt = level(u["spent"])
     n = (await repo.one("SELECT COUNT(*) n FROM orders WHERE user_id=? AND status='delivered' AND kind='buy'", u["id"]))["n"]
-    prog = f"\n{bar((u['spent'] - mn) / (nxt[0] - mn))}  faltam {brl(nxt[0] - u['spent'])} p/ {nxt[2]} {nxt[1]}" if nxt else "\nNível máximo 💎"
-    cap = (f"{header('Minha conta')}\n👛 Saldo  <b>{brl(u['balance'])}</b>\n{ico} Nível  <b>{lvl}</b>{prog}\n\n"
-           f"🧾 Compras  {n}\n💳 Total gasto  {brl(u['spent'])}\n🆔 <code>{u['id']}</code>")
-    await screen(cb, "profile", cap, kb([b("➕ Recarregar saldo", "topup")], [b("📦 Meus pedidos", "orders")], back()))
+    prog = f"\n{bar((u['spent'] - mn) / (nxt[0] - mn))}  faltam {brl(nxt[0] - u['spent'])} para {nxt[1]}" if nxt else "\nNível máximo"
+    cap = (f"{header('Minha conta')}\nSaldo  <b>{brl(u['balance'])}</b>\nNível  <b>{lvl}</b>{prog}\n{LINE}\n"
+           f"Compras  {n}\nTotal gasto  {brl(u['spent'])}\nComissões  {brl(u['ref_earned'])}\nID  <code>{u['id']}</code>")
+    await screen(cb, "profile", cap, kb([b("Adicionar saldo", "topup"), b("Meus pedidos", "orders")], back()))
 
 
 @router.callback_query(F.data == "topup")
@@ -554,13 +556,16 @@ async def ref(cb: CallbackQuery):
     me_ = await bot.me()
     n = (await repo.one("SELECT COUNT(*) n FROM users WHERE ref_by=?", cb.from_user.id))["n"]
     link = f"https://t.me/{me_.username}?start=r{cb.from_user.id}"
-    cap = (f"{header('Indique e ganhe')}\nCada compra de quem entrar pelo seu link vira "
-           f"<b>{REF_BONUS_PCT:g}%</b> de saldo para você. Para sempre.\n\n🔗 Seu link:\n<code>{link}</code>\n\n"
-           f"👥 Indicados  {n}")
-    await screen(cb, "profile", cap, kb([b("📤 Compartilhar", url=f"https://t.me/share/url?url={link}&text=Loja%20VEXA%20%E2%80%94%20comprou%2C%20chegou.")], back()))
+    tot = await repo.one("SELECT COUNT(DISTINCT o.user_id) b, COALESCE(SUM(o.amount),0) v FROM orders o JOIN users x ON x.id=o.user_id "
+                         "WHERE x.ref_by=? AND o.status='delivered' AND o.kind='buy'", cb.from_user.id)
+    u = await repo.one("SELECT ref_earned FROM users WHERE id=?", cb.from_user.id)
+    cap = (f"{header('Indique e ganhe')}\nGanhe <b>{REF_BONUS_PCT:g}%</b> de comissão em saldo sobre toda compra de quem "
+           f"entrar pelo seu link. Sem limite, para sempre.\n{LINE}\n"
+           f"Indicados  <b>{n}</b>  ·  compradores <b>{tot['b']}</b>\nVendido pelos indicados  {brl(tot['v'])}\n"
+           f"Comissão recebida  <b>{brl(u['ref_earned'])}</b>\n{LINE}\nSeu link\n<code>{link}</code>")
+    await screen(cb, "profile", cap, kb([b("Compartilhar link", url=f"https://t.me/share/url?url={link}&text=VEXA%20%E2%80%94%20comprou%2C%20chegou.")], back()))
 
 
-# ───────────────────────── suporte e garantia ─────────────────────────
 @router.callback_query(F.data == "sup")
 async def support(cb: CallbackQuery):
     rows = [[b("🛡 Acionar garantia de um pedido", "orders")]]
