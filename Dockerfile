@@ -3,5 +3,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY bot ./bot
+COPY assets ./assets
 VOLUME /app/data
 CMD ["python", "-m", "bot.main"]

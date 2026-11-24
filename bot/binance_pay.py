@@ -1,27 +1,39 @@
-"""Cliente Binance Pay (Merchant API). Docs: https://developers.binance.com/docs/binance-pay"""
+"""USDT via Binance Pay (Merchant API) + cotação USDT/BRL."""
 import hashlib
 import hmac
 import json
 import secrets
 import time
 import aiohttp
-from .config import BINANCE_API_KEY, BINANCE_SECRET, BINANCE_CURRENCY, SANDBOX, ORDER_TIMEOUT_MIN
+from .config import BINANCE_API_KEY, BINANCE_SECRET, SANDBOX, ORDER_TIMEOUT_MIN, USDT_BRL_FALLBACK, USDT_SPREAD
 
 BASE = "https://bpay.binanceapi.com"
+_rate = {"v": USDT_BRL_FALLBACK, "t": 0}
+
+
+async def usdt_brl() -> float:
+    """Cotação USDT/BRL (Binance spot), cache 5 min, + spread."""
+    if time.time() - _rate["t"] > 300:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get("https://api.binance.com/api/v3/ticker/price?symbol=USDTBRL", timeout=8) as r:
+                    _rate["v"] = float((await r.json())["price"])
+                    _rate["t"] = time.time()
+        except Exception:
+            pass
+    return _rate["v"] * (1 + USDT_SPREAD)
+
+
+async def brl_to_usdt(brl: float) -> float:
+    return round(brl / await usdt_brl(), 2)
 
 
 def _headers(body: str):
     ts = str(int(time.time() * 1000))
     nonce = secrets.token_hex(16)
-    payload = f"{ts}\n{nonce}\n{body}\n"
-    sig = hmac.new(BINANCE_SECRET.encode(), payload.encode(), hashlib.sha512).hexdigest().upper()
-    return {
-        "Content-Type": "application/json",
-        "BinancePay-Timestamp": ts,
-        "BinancePay-Nonce": nonce,
-        "BinancePay-Certificate-SN": BINANCE_API_KEY,
-        "BinancePay-Signature": sig,
-    }
+    sig = hmac.new(BINANCE_SECRET.encode(), f"{ts}\n{nonce}\n{body}\n".encode(), hashlib.sha512).hexdigest().upper()
+    return {"Content-Type": "application/json", "BinancePay-Timestamp": ts, "BinancePay-Nonce": nonce,
+            "BinancePay-Certificate-SN": BINANCE_API_KEY, "BinancePay-Signature": sig}
 
 
 async def _post(path, data):
@@ -34,25 +46,18 @@ async def _post(path, data):
     return res["data"]
 
 
-async def create_order(trade_no: str, amount: float, title: str) -> dict:
-    """Retorna {prepayId, checkoutUrl, qrcodeLink, universalUrl}."""
+async def create_order(trade_no: str, usdt: float, title: str) -> dict:
     if SANDBOX:
-        return {"prepayId": "SBX" + trade_no, "checkoutUrl": f"https://example.com/pay/{trade_no}"}
+        return {"prepayId": "SBX" + trade_no, "checkoutUrl": "https://pay.binance.com/"}
     return await _post("/binancepay/openapi/v3/order", {
-        "env": {"terminalType": "APP"},
-        "merchantTradeNo": trade_no,
-        "orderAmount": round(amount, 2),
-        "currency": BINANCE_CURRENCY,
+        "env": {"terminalType": "APP"}, "merchantTradeNo": trade_no, "orderAmount": usdt, "currency": "USDT",
         "description": title[:256],
-        "goodsDetails": [{"goodsType": "02", "goodsCategory": "Z000",
-                          "referenceGoodsId": trade_no, "goodsName": title[:256]}],
-        "orderExpireTime": int(time.time() * 1000) + ORDER_TIMEOUT_MIN * 60_000,
-    })
+        "goodsDetails": [{"goodsType": "02", "goodsCategory": "Z000", "referenceGoodsId": trade_no, "goodsName": title[:256]}],
+        "orderExpireTime": int(time.time() * 1000) + ORDER_TIMEOUT_MIN * 60_000})
 
 
-async def query_status(trade_no: str) -> str:
-    """INITIAL | PENDING | PAID | CANCELED | ERROR | REFUNDING | REFUNDED | EXPIRED"""
+async def status(trade_no: str) -> str:
     if SANDBOX:
         return "PAID"
-    data = await _post("/binancepay/openapi/v2/order/query", {"merchantTradeNo": trade_no})
-    return data["status"]
+    s = (await _post("/binancepay/openapi/v2/order/query", {"merchantTradeNo": trade_no}))["status"]
+    return "PAID" if s == "PAID" else "EXPIRED" if s in ("CANCELED", "EXPIRED", "ERROR") else "PENDING"
