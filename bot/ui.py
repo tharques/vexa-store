@@ -30,12 +30,11 @@ def stock_badge(c):
     return f"🟢 {c} em estoque"
 
 
-def home_kb(is_admin=False):
+def home_kb():
     return kb(
         [b("Explorar catálogo  →", "cat")],
-        [b("Mais vendidos", "top"), b("Meus pedidos", "orders")],
-        [b("Minha conta", "me"), b("Indique e ganhe", "ref")],
-        [b("Suporte", "sup")] + ([b("Admin", "adm")] if is_admin else []),
+        [b("Meus pedidos", "orders"), b("Minha conta", "me")],
+        [b("Indique e ganhe", "ref"), b("Suporte", "sup")],
     )
 
 

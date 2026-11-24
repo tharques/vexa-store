@@ -22,10 +22,10 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
 - `SANDBOX=1` simula pagamento aprovado (testes). Produção: `SANDBOX=0`.
 
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)
-Catálogo por categoria com paginação · mais vendidos · card de produto (preço antigo riscado, estoque,
+Catálogo por categoria com paginação · card de produto (preço antigo riscado, estoque,
 quantidade −/+) · checkout com cupom · Pix/USDT/saldo · entrega editando a tela · recarga de saldo ·
 minha conta (saldo, compras, comissões; sem níveis — removidos a pedido) · pedidos com reabertura · indique e ganhe (5% em saldo,
-link `?start=r<ID>`) · garantia/ticket → admin · aviso de venda ao admin e ao canal · painel admin por comandos
+link `?start=r<ID>`) · garantia/ticket → admin · aviso de venda ao admin e ao canal · painel admin só por comandos (sem botão no menu; "mais vendidos" removido a pedido)
 (`/admin`, `/cat`, `/add`, `/infinito`, `/estoque`, `/img`, `/preco`, `/on`/`/off`, `/lista`, `/cupom`,
 `/vendas`, `/credito`, `/responder`, `/aviso`).
 Bot no BotFather: nome, descrição, descrição curta, comandos e foto (logo) já configurados.

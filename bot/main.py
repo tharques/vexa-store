@@ -96,14 +96,14 @@ async def start(m: Message, command: CommandObject, state: FSMContext):
         ref = int(command.args[1:])
         if ref != m.from_user.id:
             await repo.x("UPDATE users SET ref_by=? WHERE id=?", ref, m.from_user.id)
-    await screen(m, "welcome", await home_caption(u), home_kb(is_admin(m.from_user.id)))
+    await screen(m, "welcome", await home_caption(u), home_kb())
 
 
 @router.callback_query(F.data == "home")
 async def home(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     u = await user(cb.from_user)
-    await screen(cb, "welcome", await home_caption(u), home_kb(is_admin(cb.from_user.id)))
+    await screen(cb, "welcome", await home_caption(u), home_kb())
 
 
 # ───────────────────────── catálogo ─────────────────────────
@@ -144,13 +144,6 @@ async def category(cb: CallbackQuery):
         nav.append(b("›", f"c:{cid}:{pg + 1}"))
     await screen(cb, "catalog", header(f"{c['emoji']} {c['name']}", f"{total} produto(s)"),
                  kb(*rows, nav, back("cat")))
-
-
-@router.callback_query(F.data == "top")
-async def top(cb: CallbackQuery):
-    prods = await repo.q("SELECT * FROM products WHERE active=1 ORDER BY sold DESC LIMIT 8")
-    await screen(cb, "catalog", header("🔥 Mais vendidos", "O que a galera mais leva"),
-                 kb(*(await product_rows(prods)), back()))
 
 
 @router.callback_query(F.data == "noop")
@@ -605,13 +598,6 @@ ADMIN_HELP = """<b>◆ Painel admin</b>
 /vendas · /cupom CODIGO|%|usos(-1=∞)
 /credito user_id|valor · /responder user_id texto
 /aviso texto — mensagem para todos"""
-
-
-@router.callback_query(F.data == "adm")
-async def adm(cb: CallbackQuery):
-    if is_admin(cb.from_user.id):
-        await cb.message.answer(ADMIN_HELP)
-    await cb.answer()
 
 
 def admin_msg(m: Message): return is_admin(m.from_user.id)
