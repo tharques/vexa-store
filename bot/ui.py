@@ -2,7 +2,7 @@
 from aiogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as K
 from .config import LEVELS
 
-LINE = "━━━━━━━━━━━━━━━━━━"
+LINE = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
 
 
 def brl(v): return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -18,7 +18,7 @@ def b(text, data=None, url=None): return B(text=text, url=url) if url else B(tex
 
 
 def header(title, sub=None):
-    return f"<b>◆ {title}</b>" + (f"\n<i>{sub}</i>" if sub else "") + f"\n{LINE}"
+    return f"<b>{title}</b>" + (f"\n<code>{sub}</code>" if sub else "") + "\n"
 
 
 def bar(frac, n=10):

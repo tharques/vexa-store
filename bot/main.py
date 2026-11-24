@@ -453,8 +453,12 @@ async def deliver(oid):
         except Exception:
             pass
     body = "\n".join(f"<code>{i}</code>" for i in items)
-    cap = (f"{header('Pedido entregue', o['code'])}\n◆ {p['name']}  ×{o['qty']}\n\n{body}\n\n"
-           f"🛡 Garantia {p['warranty_days']} dias · reenviar: /pedido {o['code']}")
+    until = (datetime.now() + timedelta(days=p["warranty_days"])).strftime("%d/%m/%Y")
+    cap = (f"✅ <b>Pagamento aprovado</b>\nPedido <code>{o['code']}</code>\n\n"
+           f"<b>{p['name']}</b>  ·  {o['qty']} un.\n{LINE}\n"
+           f"🔑 <b>Seu acesso</b>  <i>(toque para copiar)</i>\n{body}\n{LINE}\n"
+           f"🛡 Garantia até <b>{until}</b>\n"
+           f"📦 Reabra quando quiser em <b>Meus pedidos</b>")
     await show_done(o, cap[:1024], done_kb)
     if len(cap) > 1024:
         await bot.send_message(o["user_id"], body)

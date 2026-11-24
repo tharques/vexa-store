@@ -3,25 +3,34 @@ on:
   push: { branches: [main] }
   workflow_dispatch:
 jobs:
-  test:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt && python -m compileall -q bot
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    env: { HAS_VPS: "${{ secrets.VPS_HOST != '' }}" }
-    steps:
-      - if: env.HAS_VPS == 'true'
+      - name: Deploy na VPS
+        if: ${{ env.HAS_VPS == 'true' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
+          username: ${{ secrets.VPS_USER || 'root' }}
+          password: ${{ secrets.VPS_PASSWORD }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          envs: ENV_FILE,REPO,TOKEN
           script: |
-            cd ~/vexa-store || git clone https://github.com/${{ github.repository }} ~/vexa-store && cd ~/vexa-store
-            git pull --ff-only
+            set -e
+            command -v docker >/dev/null || (curl -fsSL https://get.docker.com | sh)
+            mkdir -p /opt/vexa && cd /opt/vexa
+            if [ ! -d .git ]; then git clone https://x-access-token:$TOKEN@github.com/$REPO .; fi
+            git remote set-url origin https://x-access-token:$TOKEN@github.com/$REPO
+            git fetch -q origin main && git reset -q --hard origin/main
+            printf '%s\n' "$ENV_FILE" > .env
             docker compose up -d --build
+            docker compose ps
+    env:
+      HAS_VPS: ${{ secrets.VPS_HOST != '' }}
+      ENV_FILE: ${{ secrets.ENV_FILE }}
+      REPO: ${{ github.repository }}
+      TOKEN: ${{ github.token }}
