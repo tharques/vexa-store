@@ -3,5 +3,5 @@
 <rect width="1200" height="400" fill="#0A2540"/>
 <g transform="translate(90,80) scale(.47)"><rect width="512" height="512" rx="120" fill="url(#g)"/><path d="M132 150 L256 372 L380 150" fill="none" stroke="#fff" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/><circle cx="380" cy="372" r="30" fill="#fff"/></g>
 <text x="370" y="250" font-family="Helvetica Neue,Arial,sans-serif" font-size="190" font-weight="800" fill="#fff" letter-spacing="-8">vexa</text>
-<text x="378" y="315" font-family="Helvetica Neue,Arial,sans-serif" font-size="40" font-weight="500" fill="#ADBDCC" letter-spacing="2">pague. receba. na hora.</text>
+<text x="378" y="315" font-family="Helvetica Neue,Arial,sans-serif" font-size="40" font-weight="500" fill="#ADBDCC" letter-spacing="2">comprou, chegou.</text>
 </svg>
