@@ -10,6 +10,9 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt && python -m compileall -q bot
+      - name: Secrets faltando
+        if: ${{ env.HAS_VPS != 'true' }}
+        run: echo "::warning::Deploy pulado. Cadastre VPS_HOST, VPS_PASSWORD (ou VPS_SSH_KEY) e ENV_FILE."
       - name: Deploy na VPS
         if: ${{ env.HAS_VPS == 'true' }}
         uses: appleboy/ssh-action@v1.0.3
@@ -30,7 +33,7 @@ jobs:
             docker compose up -d --build
             docker compose ps
     env:
-      HAS_VPS: ${{ secrets.VPS_HOST != '' }}
+      HAS_VPS: ${{ secrets.VPS_HOST != '' && (secrets.VPS_PASSWORD != '' || secrets.VPS_SSH_KEY != '') && secrets.ENV_FILE != '' }}
       ENV_FILE: ${{ secrets.ENV_FILE }}
       REPO: ${{ github.repository }}
       TOKEN: ${{ github.token }}
