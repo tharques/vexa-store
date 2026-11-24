@@ -18,7 +18,7 @@ from . import asaas, binance_pay as bp
 from .config import (BINANCE_API_KEY, SANDBOX, ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, ORDER_TIMEOUT_MIN, POLL_SECONDS, REF_BONUS_PCT,
                      STORE_NAME, SUPPORT_USERNAME)
 from .db import Repo, connect
-from .ui import LINE, b, back, bar, brl, header, home_kb, kb, level, stock_badge, usd
+from .ui import LINE, b, back, brl, header, home_kb, kb, stock_badge, usd
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
@@ -79,13 +79,11 @@ async def user(u):
 
 # ───────────────────────── início ─────────────────────────
 async def home_caption(u):
-    (_, lvl, _), _ = level(u["spent"])
     first = (u["name"] or "").split(" ")[0] or "cliente"
     refs = (await repo.one("SELECT COUNT(*) n FROM users WHERE ref_by=?", u["id"]))["n"]
     extra = f"\nIndicações  <b>{refs}</b>  ·  ganhos <b>{brl(u['ref_earned'])}</b>" if refs else ""
     return (f"<b>Olá, {first}</b>\n\n"
-            f"Saldo  <b>{brl(u['balance'])}</b>\n"
-            f"Nível  <b>{lvl}</b>{extra}\n\n"
+            f"Saldo  <b>{brl(u['balance'])}</b>{extra}\n\n"
             f"<i>Pix ou USDT · entrega automática em segundos</i>")
 
 
@@ -495,10 +493,8 @@ async def poller():
 @router.callback_query(F.data == "me")
 async def me(cb: CallbackQuery):
     u = await user(cb.from_user)
-    (mn, lvl, ico), nxt = level(u["spent"])
     n = (await repo.one("SELECT COUNT(*) n FROM orders WHERE user_id=? AND status='delivered' AND kind='buy'", u["id"]))["n"]
-    prog = f"\n{bar((u['spent'] - mn) / (nxt[0] - mn))}  faltam {brl(nxt[0] - u['spent'])} para {nxt[1]}" if nxt else "\nNível máximo"
-    cap = (f"{header('Minha conta')}\nSaldo  <b>{brl(u['balance'])}</b>\nNível  <b>{lvl}</b>{prog}\n{LINE}\n"
+    cap = (f"{header('Minha conta')}\nSaldo  <b>{brl(u['balance'])}</b>\n{LINE}\n"
            f"Compras  {n}\nTotal gasto  {brl(u['spent'])}\nComissões  {brl(u['ref_earned'])}\nID  <code>{u['id']}</code>")
     await screen(cb, "profile", cap, kb([b("Adicionar saldo", "topup"), b("Meus pedidos", "orders")], back()))
 

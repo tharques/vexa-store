@@ -24,7 +24,7 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)
 Catálogo por categoria com paginação · mais vendidos · card de produto (preço antigo riscado, estoque,
 quantidade −/+) · checkout com cupom · Pix/USDT/saldo · entrega editando a tela · recarga de saldo ·
-minha conta com níveis (Bronze/Prata/Ouro/Black) · pedidos com reabertura · indique e ganhe (5% em saldo,
+minha conta (saldo, compras, comissões; sem níveis — removidos a pedido) · pedidos com reabertura · indique e ganhe (5% em saldo,
 link `?start=r<ID>`) · garantia/ticket → admin · aviso de venda ao admin e ao canal · painel admin por comandos
 (`/admin`, `/cat`, `/add`, `/infinito`, `/estoque`, `/img`, `/preco`, `/on`/`/off`, `/lista`, `/cupom`,
 `/vendas`, `/credito`, `/responder`, `/aviso`).

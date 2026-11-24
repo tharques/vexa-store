@@ -1,6 +1,5 @@
 """Identidade e componentes visuais da VEXA."""
 from aiogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as K
-from .config import LEVELS
 
 LINE = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
 
@@ -21,11 +20,6 @@ def header(title, sub=None):
     return f"<b>{title}</b>" + (f"\n<code>{sub}</code>" if sub else "") + "\n"
 
 
-def bar(frac, n=10):
-    f = max(0, min(n, round(frac * n)))
-    return "▰" * f + "▱" * (n - f)
-
-
 def stock_badge(c):
     if c is None:
         return "∞ ilimitado"
@@ -34,16 +28,6 @@ def stock_badge(c):
     if c <= 5:
         return f"🔥 últimas {c}"
     return f"🟢 {c} em estoque"
-
-
-def level(spent):
-    cur = LEVELS[0]
-    nxt = None
-    for i, lv in enumerate(LEVELS):
-        if spent >= lv[0]:
-            cur = lv
-            nxt = LEVELS[i + 1] if i + 1 < len(LEVELS) else None
-    return cur, nxt
 
 
 def home_kb(is_admin=False):
