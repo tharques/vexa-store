@@ -41,25 +41,41 @@ jobs:
               echo "::warning::Portas 80/443 já em uso na VPS por outro serviço. Caddy NÃO foi iniciado; nada foi derrubado."
               ss -ltnp '( sport = :80 or sport = :443 )' | sed -E 's/pid=[0-9]+,//g' || true
               docker compose up -d --build vexa painel 2>&1 | grep -v 'variable is not set' || true
-              # 80/443 são do Caddy do host (Gestor): só ACRESCENTA o site do painel (aprovado pelo dono em 25/11/2026).
-              # Backup antes, valida, recarrega sem derrubar nada; se falhar, restaura o arquivo original.
-              CF=/etc/caddy/Caddyfile; DOMAIN="${PANEL_DOMAIN:-vexa.traxor.pro}"; PPORT="${PANEL_PORT:-18080}"
-              if echo "$BUSY" | grep -q '"caddy"' && [ -f "$CF" ] && command -v caddy >/dev/null; then
-                if grep -q "# vexa-painel" "$CF"; then
-                  echo "Caddy do host já serve $DOMAIN"
-                else
-                  BK="$CF.bak-vexa-$(date +%Y%m%d%H%M%S)"; cp "$CF" "$BK"
-                  printf '\n# vexa-painel (deploy de /opt/vexa)\n%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$DOMAIN" "$PPORT" >> "$CF"
-                  if caddy validate --config "$CF" --adapter caddyfile >/tmp/vexa-caddy.log 2>&1 && \
-                     { (systemctl is-active --quiet caddy && systemctl reload caddy) || caddy reload --config "$CF" --adapter caddyfile; } >>/tmp/vexa-caddy.log 2>&1; then
-                    echo "Caddy do host recarregado com $DOMAIN (backup: $BK)"
+              # 80/443 são do Caddy do Gestor (container). Aprovado pelo dono em 25/11/2026: acha o Caddyfile montado
+              # no host e só ACRESCENTA o site do painel. Backup, valida, recarrega sem derrubar; se falhar, restaura.
+              DOMAIN="${PANEL_DOMAIN:-vexa.traxor.pro}"; PPORT="${PANEL_PORT:-18080}"
+              CID=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' | awk '($2 ~ /caddy/ || $3 ~ /caddy/) && $3 !~ /^vexa-/ {print $1; exit}')
+              if [ -n "$CID" ]; then
+                CNAME=$(docker inspect -f '{{.Name}}' "$CID"); NET=$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$CID")
+                SRC=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}' "$CID")
+                if [ -z "$SRC" ]; then
+                  D=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy"}}{{.Source}}{{end}}{{end}}' "$CID")
+                  [ -n "$D" ] && SRC="$D/Caddyfile"
+                fi
+                echo "Caddy do Gestor: container $CNAME · rede $NET · Caddyfile no host: ${SRC:-não montado}"
+                if [ "$NET" = "host" ]; then UP="127.0.0.1:$PPORT"; else
+                  docker network connect vexa_default "$CID" 2>/dev/null || true; UP="vexa-painel-1:8000"; fi
+                if [ -n "$SRC" ] && [ -f "$SRC" ]; then
+                  if grep -q "# vexa-painel" "$SRC"; then
+                    echo "Caddy do Gestor já serve $DOMAIN"
                   else
-                    cp "$BK" "$CF"; echo "::warning::Não deu para incluir $DOMAIN no Caddy do host; arquivo original restaurado."
-                    tail -5 /tmp/vexa-caddy.log
+                    BK="$SRC.bak-vexa-$(date +%Y%m%d%H%M%S)"; cp "$SRC" "$BK"
+                    printf '\n# vexa-painel (deploy de /opt/vexa)\n%s {\n\tencode gzip\n\treverse_proxy %s\n}\n' "$DOMAIN" "$UP" >> "$SRC"
+                    if docker exec "$CID" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/tmp/vexa-caddy.log 2>&1 && \
+                       docker exec "$CID" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >>/tmp/vexa-caddy.log 2>&1; then
+                      echo "Caddy do Gestor recarregado com $DOMAIN -> $UP (backup: $BK)"
+                    else
+                      cp "$BK" "$SRC"; echo "::warning::Não deu para incluir $DOMAIN no Caddy do Gestor; arquivo original restaurado."
+                      tail -8 /tmp/vexa-caddy.log
+                    fi
                   fi
+                else
+                  echo "::warning::Caddyfile do Gestor não está montado do host; nada alterado. Mounts:"
+                  docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}' "$CID"
                 fi
               else
-                echo "::warning::Caddy do host sem /etc/caddy/Caddyfile; nada alterado."; ps -o args= -C caddy | head -2 || true
+                echo "::warning::Container do Caddy não encontrado; nada alterado."
+                docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' | head -20
               fi
             else
               docker compose --profile https up -d --build 2>&1 | grep -v 'variable is not set' || true
