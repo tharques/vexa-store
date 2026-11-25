@@ -46,6 +46,8 @@ async def status(payment_id: str) -> str:
         return "PAID"
     p = await _req("GET", f"/payments/{payment_id}")
     s = p["status"]
+    if p.get("deleted"):
+        return "EXPIRED"
     if s in ("RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"):
         return "PAID"
     if s in ("OVERDUE", "REFUNDED", "DELETED"):
