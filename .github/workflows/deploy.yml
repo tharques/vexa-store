@@ -10,6 +10,8 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt && python -m compileall -q bot
+      - name: Simulação ponta a ponta (10 clientes)
+        run: python -m tests.sim
       - name: Secrets faltando
         if: ${{ env.HAS_VPS != 'true' }}
         run: echo "::warning::Deploy pulado. Cadastre VPS_HOST, VPS_PASSWORD (ou VPS_SSH_KEY) e ENV_FILE."

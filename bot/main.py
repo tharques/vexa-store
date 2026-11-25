@@ -27,6 +27,7 @@ bot: Bot
 BANNERS = Path(__file__).resolve().parent.parent / "assets" / "banners"
 PAGE = 6
 USDT_ON = bool(BINANCE_API_KEY) or SANDBOX
+PIX_MIN = 5.0  # mínimo de cobrança do Asaas
 
 
 class S(StatesGroup):
@@ -189,7 +190,7 @@ async def checkout_view(target, state: FSMContext):
            f"◆ {p['name']}  ×{d['qty']}\n"
            f"Subtotal  {brl(sub)}\n" + (f"🎟 Cupom {d['coupon']}  −{brl(disc)}\n" if disc else "") +
            f"{LINE}\n<b>Total  {brl(total)}</b>\n<i>≈ {usd(usdt)}</i>\n\nEscolha a forma de pagamento:")
-    rows = [[b(f"⚡ Pix  ·  {brl(total)}", "pay:pix")]]
+    rows = [[b(f"⚡ Pix  ·  {brl(total)}", "pay:pix")]] if total >= PIX_MIN else []
     if USDT_ON:
         rows.append([b(f"🟡 USDT  ·  {usd(usdt)}", "pay:usdt")])
     if u["balance"] >= total:
@@ -215,7 +216,6 @@ async def ask_coupon(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Digite o código do cupom no chat ✍️", show_alert=True)
 
 
-@router.message(S.coupon)
 async def drop_screen(m: Message, state: FSMContext):
     d = await state.get_data()
     if d.get("scr"):
@@ -225,6 +225,7 @@ async def drop_screen(m: Message, state: FSMContext):
             pass
 
 
+@router.message(S.coupon)
 async def got_coupon(m: Message, state: FSMContext):
     code = (m.text or "").strip().upper()
     c = await repo.one("SELECT * FROM coupons WHERE code=? AND active=1 AND uses_left!=0", code)
@@ -260,17 +261,20 @@ async def pay(cb: CallbackQuery, state: FSMContext):
         return await home(cb, state)
     method = cb.data[4:]
     if method == "bal":
-        u = await repo.one("SELECT balance FROM users WHERE id=?", cb.from_user.id)
-        if u["balance"] < d["total"]:
+        if d.get("kind") != "buy" or "total" not in d:
+            return await home(cb, state)
+        await state.clear()
+        if not await repo.run("UPDATE users SET balance=round(balance-?,2) WHERE id=? AND balance>=?",
+                              d["total"], cb.from_user.id, d["total"]):
             return await cb.answer("Saldo insuficiente.", show_alert=True)
         oid, _ = await create_order(d, "saldo")
-        await repo.x("UPDATE users SET balance=balance-? WHERE id=?", d["total"], cb.from_user.id)
         await repo.x("UPDATE orders SET status='paid', paid_at=CURRENT_TIMESTAMP, msg_id=? WHERE id=?",
                      cb.message.message_id, oid)
-        await state.clear()
         await cb.answer("Pago com saldo ✅")
         return await deliver(oid)
     if method == "pix":
+        if d.get("total", 0) < PIX_MIN:
+            return await cb.answer(f"Pix a partir de {brl(PIX_MIN)}.", show_alert=True)
         u = await repo.one("SELECT cpf FROM users WHERE id=?", cb.from_user.id)
         if not u["cpf"]:
             await state.set_state(S.cpf)
@@ -377,9 +381,12 @@ async def cancel(cb: CallbackQuery, state: FSMContext):
     o = await repo.one("SELECT * FROM orders WHERE id=? AND user_id=? AND status='pending'", int(cb.data[3:]),
                        cb.from_user.id)
     if o:
-        await repo.x("UPDATE orders SET status='canceled' WHERE id=?", o["id"])
-        if o["method"] == "pix" and o["ext_id"]:
-            await asaas.cancel(o["ext_id"])
+        await process(o)  # pagou antes de cancelar? entrega em vez de cancelar
+        if await repo.run("UPDATE orders SET status='canceled' WHERE id=? AND status='pending'", o["id"]):
+            if o["method"] == "pix" and o["ext_id"]:
+                await asaas.cancel(o["ext_id"])
+        else:
+            return await cb.answer("Pagamento já confirmado ✅", show_alert=True)
     await cb.answer("Pedido cancelado")
     await home(cb, state)
 
@@ -389,18 +396,25 @@ async def process(o):
     if o["status"] != "pending" or not o["ext_id"]:
         return
     if datetime.utcnow() - datetime.fromisoformat(o["created_at"]) > timedelta(minutes=ORDER_TIMEOUT_MIN + 5):
-        await repo.x("UPDATE orders SET status='expired' WHERE id=?", o["id"])
-        return
+        try:
+            late = await (asaas.status(o["ext_id"]) if o["method"] == "pix" else bp.status(o["ext_id"]))
+        except Exception:
+            return
+        if late != "PAID":
+            if await repo.run("UPDATE orders SET status='expired' WHERE id=? AND status='pending'", o["id"]):
+                if o["method"] == "pix":
+                    await asaas.cancel(o["ext_id"])
+            return
     try:
         st = await (asaas.status(o["ext_id"]) if o["method"] == "pix" else bp.status(o["ext_id"]))
     except Exception:
         logging.exception("status")
         return
     if st == "PAID":
-        await repo.x("UPDATE orders SET status='paid', paid_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'", o["id"])
-        await deliver(o["id"])
+        if await repo.run("UPDATE orders SET status='paid', paid_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'", o["id"]):
+            await deliver(o["id"])
     elif st == "EXPIRED":
-        await repo.x("UPDATE orders SET status='expired' WHERE id=?", o["id"])
+        await repo.x("UPDATE orders SET status='expired' WHERE id=? AND status='pending'", o["id"])
 
 
 async def show_done(o, cap, markup):
@@ -419,7 +433,8 @@ async def deliver(oid):
     o = await repo.one("SELECT * FROM orders WHERE id=?", oid)
     if o["status"] != "paid":
         return
-    await repo.x("UPDATE orders SET status='delivering' WHERE id=? AND status='paid'", oid)
+    if not await repo.run("UPDATE orders SET status='delivering' WHERE id=? AND status='paid'", oid):
+        return  # outra tarefa já está entregando
     done_kb = kb([b("🛍 Continuar comprando", "cat")], [b("🛡 Garantia", f"tk:{o['code']}"), b("‹ Início", "home")])
     if o["kind"] == "topup":
         await repo.x("UPDATE users SET balance=balance+? WHERE id=?", o["amount"], o["user_id"])
@@ -679,6 +694,8 @@ async def a_list(m: Message):
 @router.message(Command("cupom"), admin_msg)
 async def a_coupon(m: Message):
     p = args(m, 2) + ["-1"]
+    if not 0 < float(p[1]) < 100:
+        raise ValueError
     await repo.x("INSERT OR REPLACE INTO coupons(code,pct,uses_left) VALUES(?,?,?)", p[0].upper(), float(p[1]), int(p[2]))
     await m.answer(f"🎟 Cupom {p[0].upper()} · {p[1]}% criado.")
 
@@ -709,6 +726,8 @@ async def a_reply(m: Message):
 
 @router.message(Command("aviso"), admin_msg)
 async def a_broadcast(m: Message, command: CommandObject):
+    if not command.args:
+        raise ValueError
     n = 0
     for u in await repo.q("SELECT id FROM users"):
         try:
@@ -722,10 +741,17 @@ async def a_broadcast(m: Message, command: CommandObject):
 
 @router.errors()
 async def on_error(ev):
-    logging.exception(ev.exception)
     msg = getattr(ev.update, "message", None)
-    if msg and isinstance(ev.exception, (ValueError, IndexError, TypeError)):
+    if msg and msg.text and msg.text.startswith("/") and isinstance(ev.exception, (ValueError, IndexError, TypeError)):
         await msg.answer("Formato inválido. Veja /admin.")
+        return True
+    logging.error("erro no update", exc_info=ev.exception)
+    cb = getattr(ev.update, "callback_query", None)
+    if cb:
+        try:
+            await cb.answer("Algo deu errado. Tente de novo.", show_alert=True)
+        except Exception:
+            pass
     return True
 
 

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import aiosqlite
 from .config import DB_PATH
@@ -44,6 +45,7 @@ async def connect():
 class Repo:
     def __init__(self, db):
         self.db = db
+        self.lock = asyncio.Lock()
 
     async def q(self, sql, *a):
         return await (await self.db.execute(sql, a)).fetchall()
@@ -56,6 +58,12 @@ class Repo:
         await self.db.commit()
         return cur.lastrowid
 
+    async def run(self, sql, *a):
+        """Executa e devolve quantas linhas mudaram (para operações atômicas)."""
+        cur = await self.db.execute(sql, a)
+        await self.db.commit()
+        return cur.rowcount
+
     async def stock(self, pid):
         p = await self.one("SELECT unlimited FROM products WHERE id=?", pid)
         if p and p["unlimited"]:
@@ -63,15 +71,17 @@ class Repo:
         return (await self.one("SELECT COUNT(*) c FROM stock WHERE product_id=? AND sold=0", pid))["c"]
 
     async def take_stock(self, pid, qty, order_id):
+        """Reserva atômica: devolve os itens do pedido (idempotente) ou None se faltar estoque."""
         p = await self.one("SELECT unlimited FROM products WHERE id=?", pid)
         if p["unlimited"]:
             return [p["unlimited"]] * qty
-        await self.db.execute("BEGIN IMMEDIATE")
-        rows = await (await self.db.execute(
-            "SELECT id,content FROM stock WHERE product_id=? AND sold=0 LIMIT ?", (pid, qty))).fetchall()
-        if len(rows) < qty:
-            await self.db.rollback()
-            return None
-        await self.db.executemany("UPDATE stock SET sold=1, order_id=? WHERE id=?", [(order_id, r["id"]) for r in rows])
-        await self.db.commit()
-        return [r["content"] for r in rows]
+        async with self.lock:
+            have = await self.q("SELECT content FROM stock WHERE order_id=?", order_id)
+            if len(have) >= qty:
+                return [r["content"] for r in have]
+            for _ in range(qty - len(have)):
+                if not await self.run("UPDATE stock SET sold=1, order_id=? WHERE id=(SELECT id FROM stock "
+                                      "WHERE product_id=? AND sold=0 ORDER BY id LIMIT 1)", order_id, pid):
+                    await self.run("UPDATE stock SET sold=0, order_id=NULL WHERE order_id=?", order_id)
+                    return None
+            return [r["content"] for r in await self.q("SELECT content FROM stock WHERE order_id=? ORDER BY id", order_id)]

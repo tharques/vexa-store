@@ -20,6 +20,9 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
 - `bot/db.py` — schema (users, categories, products, stock, coupons, orders, tickets, media) e reserva atômica de estoque.
 - Poller a cada `POLL_SECONDS` confirma pagamentos e entrega; recupera pedidos `paid` após queda.
 - `SANDBOX=1` simula pagamento aprovado (testes). Produção: `SANDBOX=0`.
+- `python -m tests.sim` — simulação ponta a ponta (admin + 10 clientes, Telegram falso, todos os botões,
+  Pix/USDT/saldo/recarga/cupom/garantia, corridas de duplo clique e última unidade). Roda no CI antes do deploy;
+  rode sempre após mudar o bot.
 
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)
 Catálogo por categoria com paginação · card de produto (preço antigo riscado, estoque,
