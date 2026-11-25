@@ -36,6 +36,10 @@ jobs:
             chmod 600 .env
             docker compose up -d --build 2>&1 | grep -v 'variable is not set' || true
             docker compose ps
+            echo "---- aguardando 15s e conferindo o bot ----"
+            sleep 15
+            docker compose ps -a
+            docker compose logs --tail 50 2>&1 | sed -E 's/[0-9]{8,}:[A-Za-z0-9_-]{30,}/***TOKEN***/g; s/\$?aact_[A-Za-z0-9_=:$-]+/***ASAAS***/g'
     env:
       HAS_VPS: ${{ secrets.VPS_HOST != '' && (secrets.VPS_PASSWORD != '' || secrets.VPS_SSH_KEY != '') && secrets.ENV_FILE != '' }}
       ENV_FILE: ${{ secrets.ENV_FILE }}
