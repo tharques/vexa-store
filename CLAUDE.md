@@ -7,8 +7,6 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
 - Dono: Thiago (Telegram ID `1323196351`, já é ADMIN). Não quer rodar comandos: **execute tudo você mesmo**,
   commit e push em `main`. Respostas diretas e curtas, em português.
 - Nunca commitar `.env`, `data/` nem chaves. Segredos só em GitHub Secrets.
-- Só produtos digitais próprios/licenciados. **Não** implementar venda de contas compartilhadas,
-  credenciais de terceiros ou créditos de API de terceiros (o print de referência "NIMO SHOP" fazia isso).
 
 ## Stack e arquivos
 - Python 3.12, aiogram 3.13, SQLite (aiosqlite). Entrada: `python -m bot.main`. Docker + compose.
