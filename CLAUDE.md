@@ -46,13 +46,12 @@ Secrets necessários no repositório (o Thiago cadastra; você não digita senha
 A sandbox do Claude Code não alcança a VPS por SSH direto; use o workflow (`gh workflow run deploy`) e
 acompanhe com `gh run watch`. A VPS também roda o bot "Gestor" (OpenClaw) — não mexer nele.
 
-## Pendências (em ordem) — atualizado 24/11/2026 20h52
-1. Repo está **público** temporariamente (minutos grátis do Actions acabaram; orçamento de Actions = US$ 0).
-   Ao terminar o projeto, voltar para **privado** (Settings → Change visibility).
-2. Secrets: `VPS_HOST` já cadastrado. Thiago cadastra `VPS_PASSWORD` e `ENV_FILE` (ele tem o conteúdo).
-   Depois: `gh workflow run deploy` → acompanhar → `/start` no @vexashopping_bot. `ENV_FILE` já vem com `SANDBOX=0`.
-3. Chave Asaas `vexa-bot` gerada e validada (conta Asaas é Pessoa Física, CPF). Sem permissão de saque.
-4. Binance Pay exige conta **Merchant**. Sem `BINANCE_API_KEY` (e fora do SANDBOX) o botão USDT some — loja opera só Pix + saldo.
-5. Cadastrar produtos reais pelo painel admin (catálogo de exemplo era só local).
-6. Opcional: webhook Asaas no lugar do polling, entrega de arquivos (file_id), canal @vexashopping.
-7. Lembrar o Thiago de trocar a senha root da VPS (foi exposta em chat).
+## Pendências — atualizado 24/11/2026 22h
+Bot **no ar** na VPS (deploy verde, /start, botões e /admin testados no Telegram). Descrição do BotFather já fala em Pix.
+Chave Asaas atual: `vexa-bot-2` (a `vexa-bot` vazou num log público, foi desabilitada). `.env` escapa `$` no deploy.
+1. Cadastrar produtos reais (Thiago informa nome, preço, garantia, descrição e o que é entregue).
+2. Repo **público** temporariamente (Actions sem orçamento). Voltar para **privado** ao terminar —
+   privado sem orçamento/cartão bloqueia o deploy automático.
+3. Thiago trocar a senha root da VPS e atualizar o secret `VPS_PASSWORD` (você não digita senhas).
+4. Binance Pay só com conta **Merchant**; sem chave, botão USDT fica oculto.
+5. Opcional: webhook Asaas, entrega de arquivos (file_id), canal @vexashopping, notificação de chamados por e-mail/painel.

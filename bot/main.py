@@ -121,7 +121,7 @@ async def product_rows(prods):
     rows = []
     for p in prods:
         st = await repo.stock(p["id"])
-        mark = "⛔" if st == 0 else "🔥" if st is not None and st <= 5 else "◆"
+        mark = "⛔" if st == 0 else "🔥" if st is not None and st <= 5 else "•"
         rows.append([b(f"{mark}  {p['name']}  —  {brl(p['price'])}", f"p:{p['id']}:1")])
     return rows
 
@@ -187,7 +187,7 @@ async def checkout_view(target, state: FSMContext):
     usdt = await bp.brl_to_usdt(total)
     await state.update_data(total=total, disc=disc, usdt=usdt)
     cap = (f"{header('Resumo do pedido')}\n"
-           f"◆ {p['name']}  ×{d['qty']}\n"
+           f"{p['name']}  ×{d['qty']}\n"
            f"Subtotal  {brl(sub)}\n" + (f"🎟 Cupom {d['coupon']}  −{brl(disc)}\n" if disc else "") +
            f"{LINE}\n<b>Total  {brl(total)}</b>\n<i>≈ {usd(usdt)}</i>\n\nEscolha a forma de pagamento:")
     rows = [[b(f"⚡ Pix  ·  {brl(total)}", "pay:pix")]] if total >= PIX_MIN else []
@@ -326,7 +326,7 @@ async def pix_checkout(target, state: FSMContext):
                             kb(back()))
     await repo.x("UPDATE orders SET ext_id=? WHERE id=?", px["id"], oid)
     qr = BufferedInputFile(base64.b64decode(px["qr_b64"]), filename="pix.png")
-    cap = (f"{header('Pague com Pix', code)}\n◆ {title}\n<b>Total  {brl(d['total'])}</b>\n\n"
+    cap = (f"{header('Pague com Pix', code)}\n{title}\n<b>Total  {brl(d['total'])}</b>\n\n"
            f"<b>Copia e cola</b> (toque para copiar):\n<code>{px['payload']}</code>\n\n"
            f"⏳ Expira em {ORDER_TIMEOUT_MIN} min · confirmação automática")
     m = await screen(target, "pix", cap, kb([b("🔄 Já paguei", f"chk:{oid}")], [b("✖ Cancelar", f"cx:{oid}")]),
@@ -347,7 +347,7 @@ async def usdt_checkout(cb, state):
         return await screen(cb, "usdt", header("Binance Pay indisponível") + f"\nTente Pix.\n<code>{e}</code>",
                             kb(back()))
     await repo.x("UPDATE orders SET ext_id=? WHERE id=?", code.replace("-", ""), oid)
-    cap = (f"{header('Pague em USDT', code)}\n◆ {title}\n<b>Total  {usd(d['usdt'])}</b>\n"
+    cap = (f"{header('Pague em USDT', code)}\n{title}\n<b>Total  {usd(d['usdt'])}</b>\n"
            f"<i>≈ {brl(d['total'])}</i>\n\n1. Toque em <b>Abrir Binance Pay</b>\n2. Confirme no app\n"
            f"3. Pronto — entregamos aqui automaticamente\n\n⏳ Expira em {ORDER_TIMEOUT_MIN} min")
     m = await screen(cb, "usdt", cap, kb([b("🟡 Abrir Binance Pay", url=o["checkoutUrl"])],
@@ -527,7 +527,7 @@ async def topup_go(cb: CallbackQuery, state: FSMContext):
 async def orders(cb: CallbackQuery):
     rows = await repo.q("SELECT o.*, p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE user_id=? "
                         "AND status IN('delivered','refunded') ORDER BY o.id DESC LIMIT 8", cb.from_user.id)
-    btns = [[b(f"{'◆' if r['kind'] == 'buy' else '➕'} {r['code']} · {r['name'] or 'Recarga'} · {brl(r['amount'])}",
+    btns = [[b(f"{'' if r['kind'] == 'buy' else 'Recarga · '}{r['code']} · {r['name'] or 'Saldo'} · {brl(r['amount'])}",
                f"od:{r['code']}")] for r in rows]
     await screen(cb, "profile", header("Meus pedidos", "Toque para reabrir a entrega") +
                  ("" if rows else "\nVocê ainda não comprou nada. Bora? 🛍"), kb(*btns, back()))
@@ -600,19 +600,21 @@ async def ticket_text(m: Message, state: FSMContext):
 
 
 # ───────────────────────── admin ─────────────────────────
-ADMIN_HELP = """<b>◆ Painel admin</b>
-━━━━━━━━━━━━━━━━━━
+ADMIN_HELP = f"""<b>Painel admin</b>
+{LINE}
 <b>Catálogo</b>
-/cat Nome|emoji
+/cat Nome|emoji — nova categoria
 /add cat_id|Nome|preço|garantia|descrição|preço_antigo
-/infinito id|conteúdo  — entrega ilimitada (link/arquivo)
-/estoque id  + linhas abaixo (1 unidade por linha)
-/img id  — responda a uma foto para usar no produto
+/infinito id|conteúdo — entrega ilimitada (link/arquivo)
+/estoque id + linhas abaixo (1 unidade por linha)
+/img id — responda a uma foto para usar no produto
 /preco id|valor · /off id · /on id · /lista
+
 <b>Vendas</b>
-/vendas · /cupom CODIGO|%|usos(-1=∞)
+/vendas — resumo
+/cupom CODIGO|%|usos (-1 = ilimitado)
 /credito user_id|valor · /responder user_id texto
-/aviso texto — mensagem para todos"""
+/aviso texto — mensagem para todos os clientes"""
 
 
 def admin_msg(m: Message): return is_admin(m.from_user.id)
@@ -632,7 +634,7 @@ async def a_help(m: Message): await m.answer(ADMIN_HELP)
 @router.message(Command("cat"), admin_msg)
 async def a_cat(m: Message):
     p = args(m, 1)
-    cid = await repo.x("INSERT INTO categories(name,emoji) VALUES(?,?)", p[0], p[1] if len(p) > 1 and p[1] else "◆")
+    cid = await repo.x("INSERT INTO categories(name,emoji) VALUES(?,?)", p[0], p[1] if len(p) > 1 and p[1] else "•")
     await m.answer(f"Categoria #{cid} criada.")
 
 
@@ -706,7 +708,7 @@ async def a_sales(m: Message):
     d, w, t = [await repo.one(q + extra) for extra in
                (" AND date(paid_at)=date('now')", " AND paid_at>=datetime('now','-7 days')", "")]
     u = (await repo.one("SELECT COUNT(*) n FROM users"))["n"]
-    await m.answer(f"<b>◆ Vendas</b>\nHoje  {d['n']} · {brl(d['t'])}\n7 dias  {w['n']} · {brl(w['t'])}\n"
+    await m.answer(f"<b>Vendas</b>\n{LINE}\nHoje  {d['n']} · {brl(d['t'])}\n7 dias  {w['n']} · {brl(w['t'])}\n"
                    f"Total  {t['n']} · {brl(t['t'])}\nClientes  {u}")
 
 
