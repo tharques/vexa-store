@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% block title %}Início{% endblock %}{% block h1 %}Início{% endblock %}
+{% block head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>{% endblock %}
+{% block body %}
+<div class="grid g3">
+{% for key, label in [('hoje','Hoje'),('7d','Últimos 7 dias'),('mes','Este mês')] %}{% set x = k[key] %}
+<div class="kpi {{ 'hl' if key=='hoje' }}"><div class="l">{{ label }} · {{ x.n }} venda(s)</div><div class="v">{{ x.fat|brl }}</div>
+<div class="s">Custo {{ x.custo|brl }} · Lucro <b class="{{ 'pos' if key!='hoje' }}">{{ x.lucro|brl }}</b></div></div>
+{% endfor %}
+</div>
+<div class="grid g4" style="margin:14px 0 16px">
+<a class="kpi" href="/pedidos?status=pending"><div class="l">Pedidos aguardando pagamento</div><div class="v">{{ extra.pendentes }}</div></a>
+<a class="kpi" href="/fila"><div class="l">Fila manual / fornecedor</div><div class="v">{{ extra.fila }}</div></a>
+<a class="kpi" href="/chamados?status=aberto"><div class="l">Chamados abertos</div><div class="v">{{ extra.chamados }}</div></a>
+<a class="kpi" href="/clientes"><div class="l">Saldo em carteira ({{ extra.clientes }} clientes)</div><div class="v">{{ extra.carteira|brl }}</div></a>
+</div>
+<div class="card"><h2>Vendas por dia · 30 dias</h2><div style="height:260px"><canvas id="ch"></canvas></div></div>
+<div class="card"><h2>Últimos pedidos</h2><div class="tw"><table>
+<tr><th>Pedido</th><th>Cliente</th><th>Item</th><th class="r">Valor</th><th>Forma</th><th>Status</th><th class="hide-m">Quando</th></tr>
+{% for o in recent %}<tr><td><a href="/pedidos/{{ o.id }}">{{ o.code }}</a></td><td>{{ o.uname or o.user_id }}</td><td>{{ o.name or 'Recarga' }}{% if o.qty > 1 %} ×{{ o.qty }}{% endif %}</td>
+<td class="r">{{ o.amount|brl }}</td><td>{{ o.method or '—' }}</td><td>{{ st(o.status) }}</td><td class="hide-m muted">{{ o.created_at|dt }}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Nenhum pedido ainda.</td></tr>{% endfor %}</table></div></div>
+<script>
+(function(){const d={{ chart|safe }};const el=document.getElementById('ch');if(!el||!window.Chart)return;
+new Chart(el,{type:'bar',data:{labels:d.labels,datasets:[{label:'Faturamento',data:d.fat,backgroundColor:'#635BFF',borderRadius:4},
+{label:'Lucro',data:d.lucro,backgroundColor:'#FF6BB5',borderRadius:4}]},options:{maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},
+scales:{y:{ticks:{callback:v=>'R$ '+v}},x:{grid:{display:false}}}}})})();
+</script>
+{% endblock %}

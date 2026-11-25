@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% block title %}Produtos{% endblock %}{% block h1 %}Produtos{% endblock %}
+{% block actions %}<a class="btn grad" href="/produtos/novo">+ Novo produto</a>{% endblock %}
+{% block body %}
+<div class="card"><h2>Categorias</h2>
+<div class="tw"><table><tr><th>Ordem</th><th>Emoji</th><th>Nome</th><th>Produtos</th><th></th></tr>
+{% for c in cats %}<tr x-data="{e:false}">
+<td x-show="!e">{{ c.sort }}</td><td x-show="!e">{{ c.emoji }}</td><td x-show="!e">{{ c.name }}</td><td x-show="!e">{{ c.n }}</td>
+<td x-show="!e" class="r"><button class="btn ghost sm" @click="e=true">Editar</button></td>
+<td colspan="5" x-show="e" x-cloak><form method="post" action="/categorias/salvar" class="row">{{ csrf() }}<input type="hidden" name="id" value="{{ c.id }}">
+<div style="max-width:90px"><label>Ordem</label><input name="sort" value="{{ c.sort }}" type="number"></div>
+<div style="max-width:90px"><label>Emoji</label><input name="emoji" value="{{ c.emoji }}"></div>
+<div><label>Nome</label><input name="name" value="{{ c.name }}" required></div>
+<div style="flex:0"><button class="btn">Salvar</button></div></form>
+{% if not c.n %}<form method="post" action="/categorias/{{ c.id }}/excluir" onsubmit="return confirm('Excluir categoria?')" style="margin-top:8px">{{ csrf() }}<button class="btn red sm">Excluir</button></form>{% endif %}</td>
+</tr>{% endfor %}</table></div>
+<form method="post" action="/categorias/salvar" class="row" style="margin-top:12px">{{ csrf() }}
+<div style="max-width:90px"><label>Ordem</label><input name="sort" type="number" value="0"></div>
+<div style="max-width:90px"><label>Emoji</label><input name="emoji" placeholder="🎬"></div>
+<div><label>Nova categoria</label><input name="name" placeholder="Nome" required></div>
+<div style="flex:0"><button class="btn">Criar</button></div></form></div>
+
+<div class="card"><h2>Produtos</h2><div class="tw"><table>
+<tr><th>#</th><th>Produto</th><th>Categoria</th><th class="r">Preço</th><th class="r">Custo</th><th class="r">Margem</th><th>Entrega</th><th>Estoque</th><th class="r">Vendidos</th><th></th></tr>
+{% for p in prods %}{% set m = ((p.price - (p.cost or 0)) / p.price * 100) if p.price else 0 %}
+<tr><td class="muted">{{ p.id }}</td><td><a href="/produtos/{{ p.id }}"><b>{{ p.name }}</b></a></td><td>{{ p.cat or '—' }}</td>
+<td class="r">{{ p.price|brl }}</td><td class="r">{{ (p.cost or 0)|brl }}</td><td class="r {{ 'pos' if m >= 0 else 'neg' }}">{{ m|pct }}</td>
+<td>{{ MODES.get(p.delivery_mode or 'estoque') }}{% if p.sup %}<div class="small muted">{{ p.sup }}</div>{% endif %}</td>
+<td>{% if p.unlimited %}∞{% elif (p.delivery_mode or 'estoque') != 'estoque' %}—{% else %}<span class="{{ 'neg' if not p.disp }}">{{ p.disp }}</span>{% endif %}</td>
+<td class="r">{{ p.sold }}</td><td>{% if p.active %}<span class="pill green">Ativo</span>{% else %}<span class="pill gray">Inativo</span>{% endif %}</td></tr>
+{% else %}<tr><td colspan="10" class="muted">Nenhum produto. Crie uma categoria e depois o produto.</td></tr>{% endfor %}
+</table></div></div>
+<style>[x-cloak]{display:none}</style>
+{% endblock %}

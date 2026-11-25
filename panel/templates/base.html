@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Painel{% endblock %} · VEXA</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+<script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+<script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+{% block head %}{% endblock %}
+</head>
+<body hx-headers='{"X-CSRF-Token": "{{ u.csrf if u else "" }}"}'>
+{% macro csrf() %}<input type="hidden" name="csrf" value="{{ u.csrf }}">{% endmacro %}
+{% macro st(s) %}{% set x = STATUS.get(s, (s, 'gray')) %}<span class="pill {{ x[1] }}">{{ x[0] }}</span>{% endmacro %}
+{% set path = request.url.path %}
+<div class="layout" x-data="{open:false}">
+  <nav class="side" :class="open && 'open'">
+    <div class="brand"><img src="/static/icon.svg" alt=""><div>VEXA<small>comprou, chegou.</small></div></div>
+    {% if u.role == 'admin' %}<a href="/" class="{{ 'on' if path == '/' }}">Início</a>{% endif %}
+    <div class="sec">Operação</div>
+    <a href="/pedidos" class="{{ 'on' if path.startswith('/pedidos') }}">Pedidos</a>
+    <a href="/fila" class="{{ 'on' if path.startswith('/fila') }}">Fila manual {% if nav and nav.fila %}<span class="badge">{{ nav.fila }}</span>{% endif %}</a>
+    <a href="/chamados" class="{{ 'on' if path.startswith('/chamados') }}">Chamados {% if nav and nav.chamados %}<span class="badge">{{ nav.chamados }}</span>{% endif %}</a>
+    {% if u.role == 'admin' %}
+    <div class="sec">Loja</div>
+    <a href="/produtos" class="{{ 'on' if path.startswith('/produtos') }}">Produtos</a>
+    <a href="/fornecedores" class="{{ 'on' if path.startswith('/fornecedores') }}">Fornecedores</a>
+    <a href="/clientes" class="{{ 'on' if path.startswith('/clientes') }}">Clientes</a>
+    <a href="/cupons" class="{{ 'on' if path.startswith('/cupons') }}">Cupons</a>
+    <a href="/avisos" class="{{ 'on' if path.startswith('/avisos') }}">Avisos</a>
+    <div class="sec">Gestão</div>
+    <a href="/financeiro" class="{{ 'on' if path.startswith('/financeiro') }}">Financeiro</a>
+    <a href="/config" class="{{ 'on' if path.startswith('/config') }}">Configurações</a>
+    <a href="/usuarios" class="{{ 'on' if path.startswith('/usuarios') }}">Usuários</a>
+    <a href="/auditoria" class="{{ 'on' if path.startswith('/auditoria') }}">Auditoria</a>
+    {% endif %}
+    <div class="sec">{{ u.username }} · {{ ROLES[u.role] }}</div>
+    <a href="/senha">Trocar senha</a>
+    <form method="post" action="/logout">{{ csrf() }}<button class="btn ghost sm full" style="margin-top:8px">Sair</button></form>
+  </nav>
+  <main class="main" @click="open && (open=false)">
+    <div class="top">
+      <div style="display:flex;gap:10px;align-items:center"><button class="btn ghost sm hamb" @click.stop="open=!open">☰</button><h1>{% block h1 %}{% endblock %}</h1></div>
+      <div class="row" style="flex:0 0 auto">{% block actions %}{% endblock %}</div>
+    </div>
+    {% if msg %}<div class="flash ok">{{ msg }}</div>{% endif %}
+    {% if flash %}<div class="flash ok">{{ flash }}</div>{% endif %}
+    {% if err %}<div class="flash err">{{ err }}</div>{% endif %}
+    {% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+    {% block body %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

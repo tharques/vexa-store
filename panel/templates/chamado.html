@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block title %}Chamado #{{ t.id }}{% endblock %}{% block h1 %}Chamado #{{ t.id }}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/chamados">‹ Chamados</a>{% endblock %}
+{% block body %}
+{% set x = TICKET.get(t.status, (t.status,'gray')) %}
+<div class="card"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px"><div><b>{{ t.uname or t.user_id }}</b>{% if t.username %} <span class="muted">@{{ t.username }}</span>{% endif %}
+· pedido {% if o %}<a href="/pedidos/{{ o.id }}">{{ o.code }}</a> {{ st(o.status) }}{% else %}{{ t.order_code }}{% endif %}</div><span class="pill {{ x[1] }}">{{ x[0] }}</span></div></div>
+<div class="card">{% for m in msgs %}<div class="msg {{ m.sender }}"><div class="small muted">{{ 'Cliente' if m.sender == 'cliente' else 'Suporte · ' ~ (m.staff or '') }} · {{ m.created_at|dt }}</div>{{ m.text }}</div>{% endfor %}</div>
+<form class="card" method="post" action="/chamados/{{ t.id }}/responder">{{ csrf() }}<h2>Responder</h2>
+<div class="f"><textarea name="text" required placeholder="A resposta chega no Telegram do cliente como “Suporte VEXA”."></textarea></div>
+<div class="row"><div style="flex:0"><button class="btn grad">Enviar</button></div><div style="flex:0"><button class="btn ghost" name="resolver" value="1">Enviar e resolver</button></div></div></form>
+<form class="card row" method="post" action="/chamados/{{ t.id }}/status">{{ csrf() }}<div><label>Status</label><select name="status">{% for k, v in TICKET.items() %}<option value="{{ k }}" {{ 'selected' if t.status == k }}>{{ v[0] }}</option>{% endfor %}</select></div><div style="flex:0"><button class="btn ghost">Atualizar</button></div></form>
+{% endblock %}

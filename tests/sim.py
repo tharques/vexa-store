@@ -336,6 +336,9 @@ async def run():
     await adm.send("/aviso Promo de Black Friday!"); check("/aviso envia a todos", "Enviado para" in last_text(ADMIN) and "Black Friday" in last_text(102))
     await adm.send("/aviso"); check("/aviso sem texto não quebra", "Formato" in last_text(ADMIN) or "Use" in last_text(ADMIN), last_text(ADMIN))
 
+    # ── Fornecedores (4 modos) e painel ──
+    await painel_e_fornecedores(adm, ana)
+
     # ── Estabilidade ──
     check("nenhum erro nos logs", not errors, " | ".join(errors[:5]))
     stuck = await M.repo.q("SELECT code,status FROM orders WHERE status IN('paid','delivering')")
@@ -344,6 +347,286 @@ async def run():
     print("\n".join(results))
     print(f"\n{ok_n} OK · {fail_n} FALHAS")
     os._exit(1 if fail_n else 0)
+
+
+# ───────────────────────── fornecedores + painel ─────────────────────────
+import json as _json
+import re as _re
+import html as _html
+
+
+async def fake_supplier():
+    """Fornecedor de mentira: /ok entrega códigos, /fail sempre 500, /hook recebe webhook assinado."""
+    from aiohttp import web
+    calls = {"ok": [], "fail": 0, "hook": []}
+
+    async def ping(req):
+        return web.json_response({"ok": True})
+
+    async def ok(req):
+        body = await req.json()
+        calls["ok"].append({"idem": req.headers.get("Idempotency-Key"), "auth": req.headers.get("Authorization"), **body})
+        n = int(body["qty"])
+        # devolve o header de auth na resposta para provar que o painel mascara segredos no log
+        return web.json_response({"echo": req.headers.get("Authorization"),
+                                  "data": {"codes": [f"API-{body['ref']}-{i}" for i in range(n)]}})
+
+    async def fail(req):
+        calls["fail"] += 1
+        return web.json_response({"erro": "fora do ar"}, status=500)
+
+    async def hook(req):
+        calls["hook"].append({"sig": req.headers.get("X-Vexa-Signature"), "raw": await req.read()})
+        return web.json_response({"ok": True})
+
+    app = web.Application()
+    app.add_routes([web.post("/ok", ok), web.post("/fail", fail), web.post("/hook", hook), web.get("/ok", ping)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    return f"http://127.0.0.1:{port}", calls, runner
+
+
+def csrf_of(html):
+    m = _re.search(r'name="csrf" value="([^"]+)"', html)
+    return m.group(1) if m else ""
+
+
+async def painel_e_fornecedores(adm, ana):
+    import httpx
+    from bot import fornecedores as forn
+    from panel import app as P
+    forn.RETRY_WAIT[:] = [0, 0, 0]
+    os.environ["SUP_FORN1"] = "chave-super-secreta-123"
+    base, calls, runner = await fake_supplier()
+    P.ctx.update(repo=M.repo, bot=bot)
+    H = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("203.0.113.9", 5000)),
+                          base_url="https://painel.test", follow_redirects=False)
+
+    # ── 1º deploy: usuário thiago com senha temporária só no Telegram ──
+    await P.bootstrap()
+    pw_msg = next((m["text"] for m in reversed(tg.chats[ADMIN]) if "Senha temporária" in m["text"]), "")
+    temp = _re.search(r"Senha temporária: <code>([^<]+)</code>", pw_msg)
+    u0 = await M.repo.one("SELECT * FROM panel_users WHERE username='thiago'")
+    check("painel: cria 'thiago' admin e manda senha no Telegram", temp and u0 and u0["role"] == "admin" and u0["must_change"] == 1)
+    check("painel: senha guardada só como hash bcrypt", u0 and u0["pass_hash"].startswith("$2") and temp.group(1) not in u0["pass_hash"])
+    temp = temp.group(1)
+    await P.bootstrap()
+    check("painel: bootstrap não recria usuário", (await M.repo.one("SELECT COUNT(*) n FROM panel_users"))["n"] == 1)
+
+    r = await H.get("/")
+    check("painel: sem login redireciona para /login", r.status_code == 303 and r.headers["location"] == "/login")
+
+    # ── bloqueio após 5 erros ──
+    for _ in range(5):
+        r = await H.post("/login", data={"username": "thiago", "password": "errada"})
+    check("login: 5 erros bloqueiam", "Aguarde 15 minutos" in r.text)
+    r = await H.post("/login", data={"username": "thiago", "password": temp})
+    check("login: bloqueado recusa até a senha certa", r.status_code == 200 and "Aguarde 15 minutos" in r.text)
+    await M.repo.x("UPDATE login_fail SET locked_until=datetime('now','-1 minute')")  # 15 min depois
+    n_adm = len(tg.chats[ADMIN])
+    r = await H.post("/login", data={"username": "thiago", "password": temp})
+    check("login: senha certa após o bloqueio entra", r.status_code == 303 and r.headers["location"] == "/senha")
+    ck = r.headers.get("set-cookie", "").lower()
+    check("login: cookie HttpOnly + Secure + SameSite", all(x in ck for x in ("httponly", "secure", "samesite=lax", "max-age=43200")), ck)
+    await asyncio.sleep(0.05)
+    check("login: aviso no Telegram com IP", any("Login no painel" in m["text"] and "203.0.113.9" in m["text"] for m in tg.chats[ADMIN][n_adm:]))
+    r = await H.get("/produtos")
+    check("1º acesso obriga troca de senha", r.status_code == 303 and r.headers["location"] == "/senha")
+    page = (await H.get("/senha")).text
+    r = await H.post("/senha", data={"current": temp, "new": "NovaSenha123", "repeat": "NovaSenha123"})
+    check("CSRF: POST sem token é recusado", r.status_code == 403)
+    r = await H.post("/senha", data={"csrf": csrf_of(page), "current": temp, "new": "fraca", "repeat": "fraca"})
+    check("senha fraca recusada", "pelo menos 10" in r.text)
+    r = await H.post("/senha", data={"csrf": csrf_of(page), "current": temp, "new": "NovaSenha123", "repeat": "NovaSenha123"})
+    check("troca de senha ok", r.status_code == 303 and r.headers["location"].startswith("/?msg"))
+    r = await H.get("/")
+    check("início abre com KPIs e gráfico", r.status_code == 200 and "Vendas por dia" in r.text and "Saldo em carteira" in r.text)
+    C = csrf_of(r.text)
+
+    async def post(_path, **data):
+        return await H.post(_path, data={"csrf": C, **data})
+
+    # ── cadastro pelo painel ──
+    await post("/categorias/salvar", name="Fornecedor", emoji="🚚", sort="5")
+    cat = await M.repo.one("SELECT id FROM categories WHERE name='Fornecedor'")
+    check("painel: cria categoria", cat is not None)
+    hdr = _json.dumps({"Authorization": "Bearer {secret:FORN1}"})
+    body = '{"sku": "{sku}", "qty": {qtd}, "ref": "{pedido}"}'
+    for name, kind, url in (("API Boa", "api", base + "/ok"), ("API Fora", "api", base + "/fail"),
+                            ("Hook", "webhook", base + "/hook"), ("Balcão", "manual", "")):
+        await post("/fornecedores/salvar", name=name, kind=kind, url=url, method="POST", headers=hdr, body=body,
+                   path="data.codes", timeout="5", active="1", link="https://fornecedor.exemplo")
+    sups = {s["name"]: s for s in await M.repo.q("SELECT * FROM suppliers")}
+    check("painel: cria 4 fornecedores", len(sups) == 4)
+    check("webhook ganha segredo HMAC", len(forn.conf(sups["Hook"]).get("secret", "")) >= 32)
+    r = await post("/fornecedores/salvar", name="Vaza", kind="api", url=base + "/ok", headers=_json.dumps({"Authorization": "Bearer " + "x" * 40}))
+    check("painel: recusa chave colada no header", "err=" in r.headers.get("location", ""))
+    r = await post(f"/fornecedores/{sups['API Boa']['id']}/testar")
+    check("botão Testar conexão", "msg=" in r.headers.get("location", ""), r.headers.get("location"))
+
+    async def produto(name, mode, sup=None, price="10", cost="4"):
+        await post("/produtos/salvar", name=name, category_id=str(cat["id"]), price=price, cost=cost, warranty_days="7",
+                   max_qty="5", active="1", delivery_mode=mode, supplier_id=str(sups[sup]["id"]) if sup else "",
+                   sku=f"SKU-{mode}", ref_link="https://ref.exemplo/item", description="Teste")
+        return await M.repo.one("SELECT * FROM products WHERE name=?", name)
+
+    p_api = await produto("Gift API", "api", "API Boa")
+    p_fail = await produto("Gift Quebrado", "api", "API Fora")
+    p_hook = await produto("Gift Hook", "webhook", "Hook")
+    p_man = await produto("Gift Manual", "manual", "Balcão")
+    p_est = await produto("Gift Estoque", "estoque", price="8", cost="3")
+    check("painel: cria produtos nos 4 modos", all([p_api, p_fail, p_hook, p_man, p_est]) and p_api["cost"] == 4)
+    await post(f"/produtos/{p_est['id']}/estoque", items="EST-1\nEST-2\n\nEST-3")
+    check("painel: repõe estoque colando linhas", await M.repo.stock(p_est["id"]) == 3)
+    r = await post("/produtos/salvar", name="Sem forn", category_id=str(cat["id"]), price="5", delivery_mode="api")
+    check("painel: API sem fornecedor é recusado", "err=" in r.headers.get("location", ""))
+
+    cli = U(120, "Kaio")
+    await cli.send("/start")
+    await M.repo.credit(120, 200, "ajuste: teste")
+
+    async def comprar(nome, qty=1):
+        await cli.click("Início") if cli.has("Início") else await cli.send("/start")
+        await cli.click("Explorar catálogo"); await cli.click("Fornecedor"); await cli.click(nome)
+        for _ in range(qty - 1):
+            await cli.click("+")
+        await cli.click("Comprar"); await cli.click("Saldo")
+        return await M.repo.one("SELECT * FROM orders WHERE user_id=120 ORDER BY id DESC")
+
+    # estoque
+    o = await comprar("Gift Estoque")
+    check("modo estoque entrega", o["status"] == "delivered" and "EST-1" in last_text(120) and abs(o["cost"] - 3) < .01)
+    # api
+    o = await comprar("Gift API", 2)
+    check("modo API entrega 2 códigos", o["status"] == "delivered" and last_text(120).count(f"API-{o['code']}-") == 2, last_text(120)[:200])
+    check("API: idempotência pelo código do pedido", calls["ok"][-1]["idem"] == o["code"] and calls["ok"][-1]["ref"] == o["code"])
+    check("API: secret do ENV no header", calls["ok"][-1]["auth"] == "Bearer chave-super-secreta-123")
+    check("API: log do fornecedor sem segredo", "HTTP 200" in o["supplier_log"] and "chave-super-secreta" not in o["supplier_log"], o["supplier_log"])
+    check("API: custo, fornecedor e tempo gravados", abs(o["cost"] - 8) < .01 and o["supplier_id"] == sups["API Boa"]["id"] and o["delivery_ms"] is not None)
+    # falha
+    b0 = await bal(120)
+    n_adm = len(tg.chats[ADMIN])
+    o = await comprar("Gift Quebrado")
+    check("API fora do ar: 3 tentativas", calls["fail"] == 3, calls["fail"])
+    check("falha → estorno automático em saldo", o["status"] == "refunded" and abs(await bal(120) - b0) < .01, (o["status"], await bal(120), b0))
+    check("falha → cliente avisado", "voltaram para a sua carteira" in last_text(120))
+    check("falha → admin avisado", any("Fornecedor falhou" in m["text"] for m in tg.chats[ADMIN][n_adm:]))
+    check("estorno registrado no extrato", await M.repo.one("SELECT 1 FROM ledger WHERE ref=? AND reason='estorno'", o["code"]) is not None)
+    # webhook
+    o = await comprar("Gift Hook")
+    check("webhook: pedido aguardando fornecedor", o["status"] == "awaiting" and "sendo preparado" in last_text(120), last_text(120)[:120])
+    h = calls["hook"][-1]
+    secret = forn.conf(sups["Hook"])["secret"]
+    check("webhook: POST assinado com HMAC", forn.check_sig(secret, h["raw"], h["sig"]) and _json.loads(h["raw"])["pedido"] == o["code"])
+    ret = _json.dumps({"pedido": o["code"], "itens": ["HOOK-OK-1"]}).encode()
+    r = await H.post(f"/webhook/{sups['Hook']['id']}", content=ret, headers={"X-Vexa-Signature": "sha256=errada"})
+    check("webhook: retorno com assinatura errada é recusado", r.status_code == 401)
+    r = await H.post(f"/webhook/{sups['Hook']['id']}", content=ret, headers={"X-Vexa-Signature": forn.sign(secret, ret)})
+    check("webhook: retorno assinado aceito", r.status_code == 200 and r.json()["status"] == "ready", r.text)
+    await M.tick()
+    o = await M.repo.one("SELECT * FROM orders WHERE id=?", o["id"])
+    check("webhook: bot entrega ao cliente", o["status"] == "delivered" and "HOOK-OK-1" in last_text(120))
+    r = await H.post(f"/webhook/{sups['Hook']['id']}", content=ret, headers={"X-Vexa-Signature": forn.sign(secret, ret)})
+    check("webhook: retorno repetido é idempotente", r.status_code == 200 and (await M.repo.one(
+        "SELECT COUNT(*) n FROM stock WHERE order_id=?", o["id"]))["n"] == 1)
+    # webhook sem resposta → estorno
+    o = await comprar("Gift Hook")
+    await M.repo.x("UPDATE orders SET sent_at=datetime('now','-2 hours') WHERE id=?", o["id"])
+    await M.tick()
+    check("webhook sem resposta no prazo → estorno", (await M.repo.one("SELECT status FROM orders WHERE id=?", o["id"]))["status"] == "refunded")
+    # manual
+    o = await comprar("Gift Manual")
+    check("manual: vai para a fila e avisa o cliente", o["status"] == "manual" and "Pagamento aprovado. Seu pedido está sendo preparado" in last_text(120))
+    r = await H.get("/fila")
+    check("fila manual lista o pedido com link de referência", o["code"] in r.text and "ref.exemplo" in r.text)
+    r = await post(f"/pedidos/{o['id']}/entregar", items="", back="/fila")
+    check("fila: entrega vazia recusada", "err=" in r.headers.get("location", ""))
+    r = await post(f"/pedidos/{o['id']}/entregar", items="MANUAL-XYZ", back="/fila")
+    await M.tick()
+    o = await M.repo.one("SELECT * FROM orders WHERE id=?", o["id"])
+    check("fila: entregar envia ao cliente na tela de entrega", o["status"] == "delivered" and "MANUAL-XYZ" in last_text(120)
+          and "Pagamento aprovado" in last_text(120))
+    # reenviar e estornar
+    n = len(tg.chats[120])
+    await post(f"/pedidos/{o['id']}/reenviar"); await M.tick()
+    check("pedido: reenviar entrega", len(tg.chats[120]) > n and "MANUAL-XYZ" in last_text(120))
+    b0 = await bal(120)
+    r = await post(f"/pedidos/{o['id']}/estornar", motivo="")
+    check("estorno exige motivo", "err=" in r.headers.get("location", ""))
+    await post(f"/pedidos/{o['id']}/estornar", motivo="cliente desistiu")
+    check("pedido: estorno em saldo", abs(await bal(120) - b0 - 10) < .01 and "Estorno do pedido" in last_text(120))
+    r = await post("/clientes/120/saldo", valor="5", motivo="")
+    check("ajuste de saldo exige motivo", "err=" in r.headers.get("location", ""))
+    await post("/clientes/120/saldo", valor="-5,50", motivo="correção")
+    check("ajuste de saldo aplicado", abs(await bal(120) - b0 - 4.5) < .01)
+    acts = {a["action"] for a in await M.repo.q("SELECT action FROM audit")}
+    check("auditoria registra preço/estoque/estorno/saldo", {"criou produto", "repôs estoque", "estornou em saldo", "ajustou saldo"} <= acts, acts)
+
+    # ── chamado respondido pelo painel, cliente responde no bot ──
+    t = await M.repo.one("SELECT * FROM tickets WHERE user_id=100 ORDER BY id DESC")
+    await post(f"/chamados/{t['id']}/responder", text="Chave trocada, confira!")
+    check("chamado: resposta chega como Suporte VEXA", "Suporte VEXA" in last_text(100) and "Chave trocada" in last_text(100))
+    await ana.click("Responder"); await ana.send("Funcionou, valeu!")
+    msgs = await M.repo.q("SELECT sender, text FROM ticket_messages WHERE ticket_id=? ORDER BY id", t["id"])
+    check("chamado: resposta do cliente entra na mesma conversa", [m["sender"] for m in msgs][-2:] == ["suporte", "cliente"]
+          and (await M.repo.one("SELECT status FROM tickets WHERE id=?", t["id"]))["status"] == "aberto")
+    r = await H.get(f"/chamados/{t['id']}")
+    check("chamado: thread no painel", "Funcionou, valeu!" in r.text and "Chave trocada" in r.text)
+
+    # ── configurações e cupom com validade ──
+    await post("/config", store_name="VEXA SHOPPING", support_username="vexasuporte", ref_pct="5", order_timeout_min="30",
+               pix_on="1", manual_eta="até 1 hora", webhook_timeout_min="30", txt_home="Texto novo do painel",
+               txt_support="Fale conosco", txt_manual="Pagamento aprovado. Seu pedido está sendo preparado e chega aqui em breve.")
+    await M.tick(); await cli.send("/start")
+    check("config: texto editado aparece no bot", "Texto novo do painel" in cli.text)
+    await cli.click("Explorar catálogo"); await cli.click("Fornecedor"); await cli.click("Gift Estoque"); await cli.click("Comprar")
+    check("config: USDT desligado some do checkout", not cli.has("USDT"))
+    await post("/cupons/salvar", code="VENCIDO", pct="10", uses="", expires_at="2020-01-01")
+    await cli.click("Tenho cupom"); await cli.send("VENCIDO")
+    check("cupom vencido recusado", "Cupom inválido" in last_text(120))
+
+    # ── avisos com filtro ──
+    r = await post("/avisos/previa", text="Novidade!", filtro="produto", produto=str(p_api["id"]))
+    check("avisos: prévia conta só quem comprou o produto", "<b>1</b> cliente(s)" in r.text, _re.findall(r"<b>\d+</b> cliente", r.text))
+
+    # ── todas as telas abrem ──
+    o1 = await M.repo.one("SELECT id FROM orders ORDER BY id DESC")
+    pages = ["/", "/produtos", f"/produtos/{p_api['id']}", "/produtos/novo", "/fornecedores", f"/fornecedores/{sups['Hook']['id']}",
+             "/fornecedores/novo", "/pedidos", "/pedidos?status=delivered&metodo=saldo&cliente=Kaio", f"/pedidos/{o1['id']}",
+             "/fila", "/clientes", "/clientes/120", "/financeiro", "/financeiro?conferir=1", "/financeiro/csv",
+             "/financeiro/csv?tipo=extrato", "/chamados", "/chamados?status=aberto", "/cupons", "/avisos", "/config",
+             "/usuarios", "/auditoria", "/senha"]
+    bad = []
+    for pth in pages:
+        r = await H.get(pth)
+        if r.status_code != 200:
+            bad.append(f"{pth}={r.status_code}")
+    check("painel: todas as telas abrem (25)", not bad, bad)
+    r = await H.get("/financeiro")
+    check("financeiro: lucro e margem", "Lucro" in r.text and "Margem" in r.text and "Gift API" in r.text)
+
+    # ── papéis: atendente só chamados e pedidos ──
+    r = await post("/usuarios/salvar", username="ana.suporte", role="atendente")
+    pw2 = _re.search(r'<code style="font-size:14px">([^<]+)</code>', r.text)
+    check("usuários: cria atendente com senha temporária", pw2 is not None)
+    H2 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("198.51.100.7", 5000)),
+                           base_url="https://painel.test", follow_redirects=False)
+    await H2.post("/login", data={"username": "ana.suporte", "password": _html.unescape(pw2.group(1))})
+    c2 = csrf_of((await H2.get("/senha")).text)
+    await H2.post("/senha", data={"csrf": c2, "current": _html.unescape(pw2.group(1)), "new": "Atende1234X", "repeat": "Atende1234X"})
+    codes = {p: (await H2.get(p)).status_code for p in ("/chamados", "/pedidos", "/fila", "/financeiro", "/clientes", "/config", "/usuarios")}
+    check("atendente: acessa chamados/pedidos/fila", all(codes[p] == 200 for p in ("/chamados", "/pedidos", "/fila")), codes)
+    check("atendente: bloqueado no resto", all(codes[p] == 403 for p in ("/financeiro", "/clientes", "/config", "/usuarios")), codes)
+    r = await H2.post(f"/pedidos/{o1['id']}/estornar", data={"csrf": c2, "motivo": "x"})
+    check("atendente: não estorna", r.status_code == 403)
+    # sessão expirada
+    await M.repo.x("UPDATE panel_sessions SET expires_at=datetime('now','-1 minute')")
+    r = await H.get("/produtos")
+    check("sessão expira (12 h)", r.status_code == 303 and r.headers["location"] == "/login")
+    await H.aclose(); await H2.aclose(); await runner.cleanup()
 
 
 async def safe():

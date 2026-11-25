@@ -1,6 +1,34 @@
 services:
-  vexa:
+  vexa:  # bot do Telegram
     build: .
+    image: vexa-store:latest
     env_file: .env
     volumes: ["./data:/app/data"]
     restart: unless-stopped
+
+  painel:  # painel admin (só acessível pelo Caddy, porta não publicada)
+    image: vexa-store:latest
+    depends_on: [vexa]
+    command: ["uvicorn", "panel.app:app", "--host", "0.0.0.0", "--port", "8000",
+              "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]
+    env_file: .env
+    volumes: ["./data:/app/data"]
+    expose: ["8000"]
+    restart: unless-stopped
+
+  caddy:  # HTTPS automático (Let's Encrypt); sobe só se 80/443 estiverem livres (ver deploy.yml)
+    image: caddy:2.8.4-alpine
+    profiles: ["https"]
+    depends_on: [painel]
+    ports: ["80:80", "443:443"]
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-vexa.traxor.pro}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

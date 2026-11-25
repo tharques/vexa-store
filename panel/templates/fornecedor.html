@@ -1,0 +1,38 @@
+{% extends "base.html" %}{% block title %}{{ s.name if s else 'Novo fornecedor' }}{% endblock %}
+{% block h1 %}{{ s.name if s else 'Novo fornecedor' }}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/fornecedores">‹ Fornecedores</a>
+{% if s %}<form method="post" action="/fornecedores/{{ s.id }}/testar">{{ csrf() }}<button class="btn">Testar conexão</button></form>{% endif %}{% endblock %}
+{% block body %}
+<form class="card" method="post" action="/fornecedores/salvar" x-data="{kind:'{{ s.kind if s else 'manual' }}'}" style="max-width:760px">
+{{ csrf() }}{% if s %}<input type="hidden" name="id" value="{{ s.id }}">{% endif %}
+<div class="row f"><div><label>Nome</label><input name="name" value="{{ s.name if s else '' }}" required></div>
+<div><label>Tipo</label><select name="kind" x-model="kind"><option value="api">API</option><option value="webhook">Webhook</option><option value="manual">Manual</option></select></div></div>
+<div class="row f"><div><label>Link</label><input name="link" value="{{ s.link if s else '' }}" placeholder="https://"></div>
+<div><label>Contato</label><input name="contact" value="{{ s.contact if s else '' }}" placeholder="@telegram, e-mail, WhatsApp"></div></div>
+<div class="f"><label>Observações</label><textarea name="notes" style="min-height:60px">{{ s.notes if s else '' }}</textarea></div>
+<div class="f"><label><input type="checkbox" name="active" {{ 'checked' if not s or s.active }}>Ativo</label></div>
+
+<div x-show="kind=='api'"><h2>Conector de API</h2>
+<div class="row f"><div style="max-width:120px"><label>Método</label><select name="method">{% for m in ['POST','GET','PUT'] %}<option {{ 'selected' if c.method == m }}>{{ m }}</option>{% endfor %}</select></div>
+<div><label>URL</label><input name="url" value="{{ c.url or '' }}" placeholder="https://api.fornecedor.com/v1/orders"></div></div>
+<div class="f"><label>Headers (JSON)</label><textarea name="headers" class="mono" style="min-height:80px">{{ headers }}</textarea>
+<p class="small muted">Chaves nunca ficam no painel: use <code>{secret:FORN1}</code> e adicione <code>SUP_FORN1=sua-chave</code> no ENV_FILE.</p></div>
+<div class="f"><label>Corpo (JSON com placeholders)</label><textarea name="body" class="mono" placeholder='{"product": "{sku}", "quantity": {qtd}, "reference": "{pedido}"}'>{{ c.body or '' }}</textarea>
+<p class="small muted">Placeholders: <code>{sku}</code> <code>{qtd}</code> <code>{pedido}</code>. O código do pedido também vai no header <code>Idempotency-Key</code>.</p></div>
+<div class="row f"><div><label>Caminho do código na resposta</label><input name="path" value="{{ c.path or '' }}" placeholder="data.codes  ou  items[*].key"></div>
+<div style="max-width:140px"><label>Timeout (s)</label><input name="timeout" value="{{ c.timeout or 20 }}"></div></div></div>
+
+<div x-show="kind=='webhook'"><h2>Webhook</h2>
+<div class="row f"><div><label>URL que recebe o pedido</label><input name="url" value="{{ c.url or '' }}" placeholder="https://seu-servidor/pedidos" :disabled="kind!='webhook'"></div>
+<div style="max-width:140px"><label>Timeout (s)</label><input name="timeout" value="{{ c.timeout or 15 }}" :disabled="kind!='webhook'"></div></div>
+{% if s and c.secret %}<div class="f"><label>Segredo HMAC (header X-Vexa-Signature = sha256=HMAC(corpo))</label><code style="display:block;padding:8px;word-break:break-all">{{ c.secret }}</code>
+<label style="margin-top:6px"><input type="checkbox" name="new_secret">Gerar novo segredo</label></div>
+<div class="f"><label>Retorno da entrega (POST assinado com o mesmo segredo)</label><code style="display:block;padding:8px">{{ callback }}</code>
+<p class="small muted">Corpo: <code>{"pedido":"VX-...","itens":["código 1"]}</code> ou <code>{"pedido":"VX-...","erro":"motivo"}</code></p></div>
+{% else %}<p class="small muted">O segredo HMAC é gerado ao salvar.</p>{% endif %}</div>
+
+<div x-show="kind=='manual'"><p class="muted">Pedidos de produtos ligados a este fornecedor vão para a <a href="/fila">Fila manual</a>.</p></div>
+<button class="btn grad">Salvar fornecedor</button></form>
+<script>document.querySelector('form[action="/fornecedores/salvar"]').addEventListener('submit',e=>{const k=e.target.kind.value;
+e.target.querySelectorAll('[x-show]').forEach(d=>{const on=d.getAttribute('x-show').includes("'"+k+"'");d.querySelectorAll('input,select,textarea').forEach(i=>i.disabled=!on)})});</script>
+{% endblock %}

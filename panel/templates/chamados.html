@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Chamados{% endblock %}{% block h1 %}Chamados{% endblock %}
+{% block body %}
+<div class="tabs"><a href="/chamados" class="{{ 'on' if not st }}">Todos</a>{% for k, v in TICKET.items() %}<a href="/chamados?status={{ k }}" class="{{ 'on' if st == k }}">{{ v[0] }}</a>{% endfor %}</div>
+<div class="card"><div class="tw"><table><tr><th>#</th><th>Cliente</th><th>Pedido</th><th>Mensagem</th><th>Status</th><th class="hide-m">Atualizado</th></tr>
+{% for t in rows %}{% set x = TICKET.get(t.status, (t.status,'gray')) %}<tr><td><a href="/chamados/{{ t.id }}">#{{ t.id }}</a></td><td>{{ t.uname or t.user_id }}</td><td>{{ t.order_code }}</td>
+<td><a href="/chamados/{{ t.id }}" style="color:inherit">{{ t.text[:80] }}{% if t.text|length > 80 %}…{% endif %}</a> <span class="muted small">({{ t.n }})</span></td>
+<td><span class="pill {{ x[1] }}">{{ x[0] }}</span></td><td class="hide-m muted">{{ (t.updated_at or t.created_at)|dt }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Nenhum chamado.</td></tr>{% endfor %}</table></div></div>
+{% endblock %}

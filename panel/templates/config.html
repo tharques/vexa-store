@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Configurações{% endblock %}{% block h1 %}Configurações{% endblock %}
+{% block body %}
+<form class="card" method="post" action="/config" style="max-width:760px">{{ csrf() }}
+<h2>Loja</h2>
+<div class="row f"><div><label>{{ labels.store_name }}</label><input name="store_name" value="{{ cfg.store_name }}"></div>
+<div><label>{{ labels.support_username }}</label><input name="support_username" value="{{ cfg.support_username }}"></div></div>
+<div class="row f"><div><label>{{ labels.ref_pct }}</label><input name="ref_pct" value="{{ cfg.ref_pct }}" inputmode="decimal"></div>
+<div><label>{{ labels.order_timeout_min }}</label><input name="order_timeout_min" value="{{ cfg.order_timeout_min }}" type="number"></div></div>
+<h2 style="margin-top:12px">Pagamentos</h2>
+<div class="f"><label><input type="checkbox" name="pix_on" {{ 'checked' if cfg.pix_on == '1' }}>{{ labels.pix_on }}</label>
+<label><input type="checkbox" name="usdt_on" {{ 'checked' if cfg.usdt_on == '1' }}>{{ labels.usdt_on }} <span class="muted">(só funciona com chave Binance Pay Merchant)</span></label></div>
+<h2 style="margin-top:12px">Entrega</h2>
+<div class="row f"><div><label>{{ labels.manual_eta }}</label><input name="manual_eta" value="{{ cfg.manual_eta }}"></div>
+<div><label>{{ labels.webhook_timeout_min }}</label><input name="webhook_timeout_min" value="{{ cfg.webhook_timeout_min }}" type="number"></div></div>
+<h2 style="margin-top:12px">Textos do bot</h2>
+{% for k in ['txt_home','txt_support','txt_manual'] %}<div class="f"><label>{{ labels[k] }}</label><textarea name="{{ k }}" style="min-height:70px">{{ cfg[k] }}</textarea></div>{% endfor %}
+<button class="btn grad">Salvar</button></form>
+{% endblock %}

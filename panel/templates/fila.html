@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Fila manual{% endblock %}{% block h1 %}Fila manual{% endblock %}
+{% block body %}
+{% for o in rows %}
+<div class="card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+<div><h2 style="margin:0">{{ o.pname }}{% if o.qty > 1 %} ×{{ o.qty }}{% endif %} · {{ o.amount|brl }}</h2>
+<div class="small muted"><a href="/pedidos/{{ o.id }}">{{ o.code }}</a> · {{ o.uname or o.user_id }}{% if o.username %} @{{ o.username }}{% endif %} · pago {{ o.paid_at|dt }}</div></div>
+<div>{{ st(o.status) }}</div></div>
+{% if o.pnotes %}<p class="small" style="margin:10px 0 0"><b>Obs.:</b> {{ o.pnotes }}</p>{% endif %}
+<div class="row" style="margin:12px 0">
+{% if o.ref_link %}<a class="btn ghost sm" style="flex:0" href="{{ o.ref_link }}" target="_blank" rel="noopener noreferrer">Link de referência ↗</a>{% endif %}
+{% if o.slink %}<a class="btn ghost sm" style="flex:0" href="{{ o.slink }}" target="_blank" rel="noopener noreferrer">Abrir fornecedor{% if o.sname %} · {{ o.sname }}{% endif %} ↗</a>{% endif %}</div>
+<form method="post" action="/pedidos/{{ o.id }}/entregar" class="row">{{ csrf() }}<input type="hidden" name="back" value="/fila">
+<div style="flex:3"><label>Entrega ({{ o.qty }} linha(s))</label><textarea name="items" required style="min-height:60px" placeholder="texto, link ou código"></textarea></div>
+<div style="flex:0"><button class="btn grad">Entregar</button></div></form></div>
+{% else %}<div class="card muted">Nenhum pedido aguardando. 🎉</div>{% endfor %}
+{% endblock %}

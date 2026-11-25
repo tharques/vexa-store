@@ -1,0 +1,55 @@
+{% extends "base.html" %}{% block title %}{{ p.name if p else 'Novo produto' }}{% endblock %}
+{% block h1 %}{{ p.name if p else 'Novo produto' }}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/produtos">‹ Produtos</a>{% endblock %}
+{% block body %}
+<div class="grid g2" style="align-items:start">
+<form class="card" method="post" action="/produtos/salvar" x-data="{mode:'{{ (p.delivery_mode if p else 'estoque') or 'estoque' }}', price:{{ p.price if p else 0 }}, cost:{{ (p.cost or 0) if p else 0 }}}">
+{{ csrf() }}{% if p %}<input type="hidden" name="id" value="{{ p.id }}">{% endif %}
+<h2>Dados do produto</h2>
+<div class="f"><label>Nome</label><input name="name" value="{{ p.name if p else '' }}" required maxlength="120"></div>
+<div class="row f"><div><label>Categoria</label><select name="category_id" required><option value="">—</option>
+{% for c in cats %}<option value="{{ c.id }}" {{ 'selected' if p and p.category_id == c.id }}>{{ c.emoji }} {{ c.name }}</option>{% endfor %}</select></div>
+<div style="max-width:110px"><label>Ordem</label><input type="number" name="sort" value="{{ p.sort if p and p.sort else 0 }}"></div></div>
+<div class="row f">
+<div><label>Preço (R$)</label><input name="price" inputmode="decimal" value="{{ ('%.2f'|format(p.price)).replace('.', ',') if p else '' }}" required x-on:input="price=parseFloat($event.target.value.replace(',','.'))||0"></div>
+<div><label>Preço antigo (riscado)</label><input name="old_price" inputmode="decimal" value="{{ ('%.2f'|format(p.old_price)).replace('.', ',') if p and p.old_price else '' }}"></div>
+<div><label>Custo (R$)</label><input name="cost" inputmode="decimal" value="{{ ('%.2f'|format(p.cost)).replace('.', ',') if p and p.cost else '' }}" x-on:input="cost=parseFloat($event.target.value.replace(',','.'))||0"></div></div>
+<p class="small" style="margin-top:-4px">Margem: <b x-text="price ? ((price-cost)/price*100).toFixed(1).replace('.',',')+'%  ·  R$ '+(price-cost).toFixed(2).replace('.',',')+' por unidade' : '—'"></b></p>
+<div class="f"><label>Descrição (aparece no bot)</label><textarea name="description" maxlength="800">{{ p.description if p else '' }}</textarea></div>
+<div class="row f"><div><label>Garantia (dias)</label><input type="number" name="warranty_days" value="{{ p.warranty_days if p else 7 }}"></div>
+<div><label>Qtd. máxima por pedido</label><input type="number" name="max_qty" value="{{ p.max_qty if p else 10 }}" min="1"></div></div>
+<div class="f"><label><input type="checkbox" name="active" {{ 'checked' if not p or p.active }}>Ativo (visível no bot)</label></div>
+<h2 style="margin-top:18px">Entrega</h2>
+<div class="f"><label>Modo de entrega</label><select name="delivery_mode" x-model="mode">
+{% for k, v in MODES.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+<p class="small muted" x-show="mode=='estoque'">Entrega na hora a partir do estoque (uma linha = uma unidade) ou de um conteúdo ilimitado.</p>
+<p class="small muted" x-show="mode=='api'">O bot pede o código ao fornecedor pela API e entrega na hora. Falhou 3x → estorno em saldo.</p>
+<p class="small muted" x-show="mode=='webhook'">O bot envia o pedido assinado ao fornecedor e entrega quando ele responder.</p>
+<p class="small muted" x-show="mode=='manual'">Vai para a Fila manual; você cola a entrega no painel.</p></div>
+<div class="f" x-show="mode=='estoque'"><label>Conteúdo ilimitado (opcional)</label><input name="unlimited" value="{{ p.unlimited if p and p.unlimited else '' }}" placeholder="ex.: link do arquivo — mesma entrega para todos"></div>
+<div class="row f" x-show="mode!='estoque'"><div><label>Fornecedor</label><select name="supplier_id"><option value="">—</option>
+{% for s in sups %}<option value="{{ s.id }}" {{ 'selected' if p and p.supplier_id == s.id }}>{{ s.name }} ({{ s.kind }})</option>{% endfor %}</select></div>
+<div><label>SKU no fornecedor</label><input name="sku" value="{{ p.sku if p and p.sku else '' }}"></div></div>
+<div class="f"><label>Link de referência</label><input name="ref_link" value="{{ p.ref_link if p and p.ref_link else '' }}" placeholder="https://..."></div>
+<div class="f"><label>Observações internas</label><textarea name="notes" style="min-height:60px">{{ p.notes if p and p.notes else '' }}</textarea></div>
+<button class="btn grad">Salvar produto</button></form>
+
+<div>
+{% if p %}
+<div class="card"><h2>Foto</h2>
+{% if p.image %}<img src="/produtos/{{ p.id }}/foto" alt="" style="width:100%;max-height:220px;object-fit:cover;border-radius:10px;margin-bottom:10px">{% else %}<p class="muted">Sem foto (usa o banner padrão).</p>{% endif %}
+<form method="post" action="/produtos/{{ p.id }}/foto" enctype="multipart/form-data" class="row">{{ csrf() }}
+<div><input type="file" name="foto" accept="image/*" required></div><div style="flex:0"><button class="btn">Enviar</button></div></form>
+<p class="small muted">A imagem vai para o Telegram e vira file_id (carrega instantâneo no bot).</p></div>
+{% if (p.delivery_mode or 'estoque') == 'estoque' and not p.unlimited %}
+<div class="card"><h2>Estoque</h2>
+<p>Disponível <b>{{ st.disp or 0 }}</b> · vendido {{ st.vend or 0 }}</p>
+<form method="post" action="/produtos/{{ p.id }}/estoque">{{ csrf() }}
+<div class="f"><label>Repor (uma unidade por linha)</label><textarea name="items" style="min-height:140px" placeholder="login1:senha1&#10;login2:senha2"></textarea></div>
+<button class="btn">Adicionar ao estoque</button></form>
+{% if st.disp %}<form method="post" action="/produtos/{{ p.id }}/estoque/limpar" onsubmit="return confirm('Remover todas as unidades disponíveis?')" style="margin-top:10px">{{ csrf() }}<button class="btn red sm">Zerar estoque disponível</button></form>{% endif %}
+</div>{% endif %}
+{% if p.ref_link %}<div class="card"><h2>Referência</h2><a href="{{ p.ref_link }}" target="_blank" rel="noopener noreferrer">{{ p.ref_link }}</a></div>{% endif %}
+{% else %}<div class="card muted">Salve o produto para enviar foto e repor estoque.</div>{% endif %}
+</div></div>
+{% endblock %}

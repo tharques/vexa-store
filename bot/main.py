@@ -1,6 +1,8 @@
 import asyncio
 import base64
+import json
 import logging
+import time
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -14,10 +16,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BufferedInputFile, CallbackQuery, FSInputFile, InputMediaPhoto, Message)
 
-from . import asaas, binance_pay as bp
-from .config import (BINANCE_API_KEY, SANDBOX, ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, ORDER_TIMEOUT_MIN, POLL_SECONDS, REF_BONUS_PCT,
-                     STORE_NAME, SUPPORT_USERNAME)
+from . import asaas, binance_pay as bp, fornecedores as forn, store
+from .config import ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, POLL_SECONDS
 from .db import Repo, connect
+from .store import cfg, num, on
 from .ui import LINE, b, back, brl, header, home_kb, kb, stock_badge, usd
 
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +28,6 @@ repo: Repo
 bot: Bot
 BANNERS = Path(__file__).resolve().parent.parent / "assets" / "banners"
 PAGE = 6
-USDT_ON = bool(BINANCE_API_KEY) or SANDBOX
 PIX_MIN = 5.0  # mínimo de cobrança do Asaas
 
 
@@ -34,6 +35,7 @@ class S(StatesGroup):
     cpf = State()
     coupon = State()
     ticket = State()
+    ticket_reply = State()
 
 
 def is_admin(uid): return uid in ADMIN_IDS
@@ -85,7 +87,7 @@ async def home_caption(u):
     extra = f"\nIndicações  <b>{refs}</b>  ·  ganhos <b>{brl(u['ref_earned'])}</b>" if refs else ""
     return (f"<b>Olá, {first}</b>\n\n"
             f"Saldo  <b>{brl(u['balance'])}</b>{extra}\n\n"
-            f"<i>Pix ou USDT · entrega automática em segundos</i>")
+            f"<i>{cfg('txt_home')}</i>")
 
 
 @router.message(CommandStart())
@@ -132,7 +134,7 @@ async def category(cb: CallbackQuery):
     cid, pg = int(cid), int(pg)
     c = await repo.one("SELECT * FROM categories WHERE id=?", cid)
     total = (await repo.one("SELECT COUNT(*) n FROM products WHERE category_id=? AND active=1", cid))["n"]
-    prods = await repo.q("SELECT * FROM products WHERE category_id=? AND active=1 ORDER BY sold DESC, name "
+    prods = await repo.q("SELECT * FROM products WHERE category_id=? AND active=1 ORDER BY sort, sold DESC, name "
                          "LIMIT ? OFFSET ?", cid, PAGE, pg * PAGE)
     rows = await product_rows(prods)
     pages = max(1, -(-total // PAGE))
@@ -190,8 +192,8 @@ async def checkout_view(target, state: FSMContext):
            f"{p['name']}  ×{d['qty']}\n"
            f"Subtotal  {brl(sub)}\n" + (f"🎟 Cupom {d['coupon']}  −{brl(disc)}\n" if disc else "") +
            f"{LINE}\n<b>Total  {brl(total)}</b>\n<i>≈ {usd(usdt)}</i>\n\nEscolha a forma de pagamento:")
-    rows = [[b(f"⚡ Pix  ·  {brl(total)}", "pay:pix")]] if total >= PIX_MIN else []
-    if USDT_ON:
+    rows = [[b(f"⚡ Pix  ·  {brl(total)}", "pay:pix")]] if total >= PIX_MIN and on("pix_on") else []
+    if on("usdt_on"):
         rows.append([b(f"🟡 USDT  ·  {usd(usdt)}", "pay:usdt")])
     if u["balance"] >= total:
         rows.append([b(f"👛 Saldo  ·  {brl(u['balance'])} disponível", "pay:bal")])
@@ -228,7 +230,8 @@ async def drop_screen(m: Message, state: FSMContext):
 @router.message(S.coupon)
 async def got_coupon(m: Message, state: FSMContext):
     code = (m.text or "").strip().upper()
-    c = await repo.one("SELECT * FROM coupons WHERE code=? AND active=1 AND uses_left!=0", code)
+    c = await repo.one("SELECT * FROM coupons WHERE code=? AND active=1 AND uses_left!=0 AND (expires_at IS NULL "
+                       "OR expires_at='' OR expires_at>=date('now','-3 hours'))", code)
     await m.delete()
     await state.set_state(None)
     if not c:
@@ -264,15 +267,18 @@ async def pay(cb: CallbackQuery, state: FSMContext):
         if d.get("kind") != "buy" or "total" not in d:
             return await home(cb, state)
         await state.clear()
-        if not await repo.run("UPDATE users SET balance=round(balance-?,2) WHERE id=? AND balance>=?",
-                              d["total"], cb.from_user.id, d["total"]):
+        if not await repo.debit(cb.from_user.id, d["total"], "compra"):
             return await cb.answer("Saldo insuficiente.", show_alert=True)
-        oid, _ = await create_order(d, "saldo")
+        oid, code = await create_order(d, "saldo")
+        await repo.x("UPDATE ledger SET ref=? WHERE id=(SELECT MAX(id) FROM ledger WHERE user_id=? AND reason='compra')",
+                     code, cb.from_user.id)
         await repo.x("UPDATE orders SET status='paid', paid_at=CURRENT_TIMESTAMP, msg_id=? WHERE id=?",
                      cb.message.message_id, oid)
         await cb.answer("Pago com saldo ✅")
         return await deliver(oid)
     if method == "pix":
+        if not on("pix_on"):
+            return await cb.answer("Pix indisponível no momento.", show_alert=True)
         if d.get("total", 0) < PIX_MIN:
             return await cb.answer(f"Pix a partir de {brl(PIX_MIN)}.", show_alert=True)
         u = await repo.one("SELECT cpf FROM users WHERE id=?", cb.from_user.id)
@@ -284,8 +290,9 @@ async def pay(cb: CallbackQuery, state: FSMContext):
                                 "<i>Exigência do banco emissor. Usamos só para a cobrança.</i>",
                                 kb(back("home", "✖ Cancelar")))
         return await pix_checkout(cb, state)
-    if method == "usdt":
+    if method == "usdt" and on("usdt_on"):
         return await usdt_checkout(cb, state)
+    await cb.answer("Forma de pagamento indisponível.", show_alert=True)
 
 
 def valid_cpf(c):
@@ -318,7 +325,7 @@ async def pix_checkout(target, state: FSMContext):
     title = await order_title(oid)
     try:
         cid = await asaas.ensure_customer(uid, u["name"], u["cpf"])
-        px = await asaas.create_pix(cid, d["total"], f"{STORE_NAME} {code} - {title}", code)
+        px = await asaas.create_pix(cid, d["total"], f"{cfg('store_name')} {code} - {title}", code)
     except Exception as e:
         logging.exception("pix")
         await repo.x("UPDATE orders SET status='failed' WHERE id=?", oid)
@@ -328,7 +335,7 @@ async def pix_checkout(target, state: FSMContext):
     qr = BufferedInputFile(base64.b64decode(px["qr_b64"]), filename="pix.png")
     cap = (f"{header('Pague com Pix', code)}\n{title}\n<b>Total  {brl(d['total'])}</b>\n\n"
            f"<b>Copia e cola</b> (toque para copiar):\n<code>{px['payload']}</code>\n\n"
-           f"⏳ Expira em {ORDER_TIMEOUT_MIN} min · confirmação automática")
+           f"⏳ Expira em {cfg('order_timeout_min')} min · confirmação automática")
     m = await screen(target, "pix", cap, kb([b("🔄 Já paguei", f"chk:{oid}")], [b("✖ Cancelar", f"cx:{oid}")]),
                      photo=qr)
     await repo.x("UPDATE orders SET msg_id=? WHERE id=?", m.message_id, oid)
@@ -349,7 +356,7 @@ async def usdt_checkout(cb, state):
     await repo.x("UPDATE orders SET ext_id=? WHERE id=?", code.replace("-", ""), oid)
     cap = (f"{header('Pague em USDT', code)}\n{title}\n<b>Total  {usd(d['usdt'])}</b>\n"
            f"<i>≈ {brl(d['total'])}</i>\n\n1. Toque em <b>Abrir Binance Pay</b>\n2. Confirme no app\n"
-           f"3. Pronto — entregamos aqui automaticamente\n\n⏳ Expira em {ORDER_TIMEOUT_MIN} min")
+           f"3. Pronto — entregamos aqui automaticamente\n\n⏳ Expira em {cfg('order_timeout_min')} min")
     m = await screen(cb, "usdt", cap, kb([b("🟡 Abrir Binance Pay", url=o["checkoutUrl"])],
                                          [b("🔄 Já paguei", f"chk:{oid}"), b("✖ Cancelar", f"cx:{oid}")]))
     await repo.x("UPDATE orders SET msg_id=? WHERE id=?", m.message_id, oid)
@@ -395,7 +402,7 @@ async def cancel(cb: CallbackQuery, state: FSMContext):
 async def process(o):
     if o["status"] != "pending" or not o["ext_id"]:
         return
-    if datetime.utcnow() - datetime.fromisoformat(o["created_at"]) > timedelta(minutes=ORDER_TIMEOUT_MIN + 5):
+    if datetime.utcnow() - datetime.fromisoformat(o["created_at"]) > timedelta(minutes=num("order_timeout_min") + 5):
         try:
             late = await (asaas.status(o["ext_id"]) if o["method"] == "pix" else bp.status(o["ext_id"]))
         except Exception:
@@ -417,10 +424,10 @@ async def process(o):
         await repo.x("UPDATE orders SET status='expired' WHERE id=? AND status='pending'", o["id"])
 
 
-async def show_done(o, cap, markup):
+async def show_done(o, cap, markup, new=False):
     pic = await media("done")
     try:
-        if o["msg_id"]:
+        if o["msg_id"] and not new:
             m = await bot.edit_message_media(chat_id=o["user_id"], message_id=o["msg_id"],
                                              media=InputMediaPhoto(media=pic, caption=cap), reply_markup=markup)
             return await remember("done", m if isinstance(m, Message) else None)
@@ -429,69 +436,183 @@ async def show_done(o, cap, markup):
     await remember("done", await bot.send_photo(o["user_id"], pic, caption=cap, reply_markup=markup))
 
 
+def done_kb(o):
+    return kb([b("🛍 Continuar comprando", "cat")], [b("🛡 Garantia", f"tk:{o['code']}"), b("‹ Início", "home")])
+
+
+async def notify_admins(text):
+    for a in ADMIN_IDS:
+        try:
+            await bot.send_message(a, text)
+        except Exception:
+            pass
+
+
+async def olog(oid, line):
+    """Linha do tempo do fornecedor no pedido (nunca contém segredos: forn.redact)."""
+    await repo.x("UPDATE orders SET supplier_log=COALESCE(supplier_log,'')||? WHERE id=?",
+                 f"[{datetime.utcnow():%d/%m %H:%M:%S}] {line}\n", oid)
+
+
+async def refund_fail(o, p, reason):
+    """Fornecedor falhou: estorno automático em saldo + avisos."""
+    if not await repo.run("UPDATE orders SET status='refunded' WHERE id=? AND status IN('delivering','awaiting','manual')",
+                          o["id"]):
+        return
+    await repo.credit(o["user_id"], o["amount"], "estorno", o["code"])
+    await olog(o["id"], f"estornado em saldo: {reason}")
+    await show_done(o, f"{header('Não foi possível entregar', o['code'])}\nO fornecedor não confirmou o seu pedido.\n"
+                       f"<b>{brl(o['amount'])}</b> voltaram para a sua carteira. Use em qualquer compra.", done_kb(o))
+    await notify_admins(f"⚠️ Fornecedor falhou · {o['code']} · {p['name']} ×{o['qty']}\n{reason}\n"
+                        f"Estornado {brl(o['amount'])} em saldo.")
+
+
+async def preparing(o, p):
+    await show_done(o, f"✅ <b>{cfg('txt_manual')}</b>\nPedido <code>{o['code']}</code>\n\n"
+                       f"<b>{p['name']}</b>  ·  {o['qty']} un.\n⏱ Prazo: {cfg('manual_eta')}\n"
+                       f"Você recebe aqui assim que ficar pronto.", done_kb(o))
+
+
+async def save_items(o, p, items):
+    await repo.db.executemany("INSERT INTO stock(product_id,content,sold,order_id) VALUES(?,?,1,?)",
+                              [(p["id"], i, o["id"]) for i in items])
+    await repo.db.commit()
+
+
 async def deliver(oid):
     o = await repo.one("SELECT * FROM orders WHERE id=?", oid)
     if o["status"] != "paid":
         return
     if not await repo.run("UPDATE orders SET status='delivering' WHERE id=? AND status='paid'", oid):
         return  # outra tarefa já está entregando
-    done_kb = kb([b("🛍 Continuar comprando", "cat")], [b("🛡 Garantia", f"tk:{o['code']}"), b("‹ Início", "home")])
     if o["kind"] == "topup":
-        await repo.x("UPDATE users SET balance=balance+? WHERE id=?", o["amount"], o["user_id"])
-        await repo.x("UPDATE orders SET status='delivered' WHERE id=?", oid)
+        if not await repo.one("SELECT 1 FROM ledger WHERE ref=? AND reason='recarga'", o["code"]):
+            await repo.credit(o["user_id"], o["amount"], "recarga", o["code"])
+        await repo.x("UPDATE orders SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE id=?", oid)
         u = await repo.one("SELECT balance FROM users WHERE id=?", o["user_id"])
         return await show_done(o, f"{header('Recarga confirmada', o['code'])}\n+{brl(o['amount'])} na carteira\n"
-                                  f"👛 Saldo atual  <b>{brl(u['balance'])}</b>", done_kb)
+                                  f"👛 Saldo atual  <b>{brl(u['balance'])}</b>", done_kb(o))
     p = await repo.one("SELECT * FROM products WHERE id=?", o["product_id"])
-    items = await repo.take_stock(p["id"], o["qty"], oid)
+    mode = p["delivery_mode"] or "estoque"
+    sup = await repo.one("SELECT * FROM suppliers WHERE id=?", p["supplier_id"]) if p["supplier_id"] else None
+    await repo.x("UPDATE orders SET supplier_id=?, cost=? WHERE id=?", p["supplier_id"], round((p["cost"] or 0) * o["qty"], 2), oid)
+    if mode == "estoque":
+        items = await repo.take_stock(p["id"], o["qty"], oid)
+        if items is None:
+            await repo.credit(o["user_id"], o["amount"], "estorno", o["code"])
+            await repo.x("UPDATE orders SET status='refunded' WHERE id=?", oid)
+            return await show_done(o, f"{header('Estoque esgotado', o['code'])}\nO produto acabou durante o pagamento.\n"
+                                      f"<b>{brl(o['amount'])}</b> foram creditados na sua carteira.", done_kb(o))
+        return await finish(oid, items)
+    if mode == "manual":
+        await repo.x("UPDATE orders SET status='manual', sent_at=CURRENT_TIMESTAMP WHERE id=?", oid)
+        await olog(oid, "na fila manual")
+        await preparing(o, p)
+        link = f"\n🔗 {p['ref_link']}" if p["ref_link"] else ""
+        return await notify_admins(f"🧾 Fila manual · {o['code']} · {p['name']} ×{o['qty']} · {brl(o['amount'])}{link}")
+    if not sup or not sup["active"]:
+        return await refund_fail(o, p, "produto sem fornecedor ativo")
+    log_lines = []
+    await repo.x("UPDATE orders SET sent_at=CURRENT_TIMESTAMP WHERE id=?", oid)
+    await olog(oid, f"enviado ao fornecedor {sup['name']} ({mode})")
+    try:
+        if mode == "api":
+            items = await forn.call_api(sup, p["sku"] or "", o["qty"], o["code"], log_lines.append)
+        else:
+            await forn.call_webhook(sup, {"pedido": o["code"], "sku": p["sku"] or "", "qtd": o["qty"],
+                                          "produto": p["name"], "valor": o["amount"]}, log_lines.append)
+            items = None
+    except Exception as e:
+        for ln in log_lines:
+            await olog(oid, ln)
+        return await refund_fail(o, p, f"{sup['name']}: {e}")
+    for ln in log_lines:
+        await olog(oid, ln)
+    if items is None:  # webhook: aguarda o retorno no painel
+        await repo.x("UPDATE orders SET status='awaiting' WHERE id=? AND status='delivering'", oid)
+        return await preparing(o, p)
+    await save_items(o, p, items)
+    await finish(oid, items)
+
+
+async def finish(oid, items=None):
+    """Entrega final (estoque, API, ou pedido 'ready' vindo do painel/webhook)."""
+    o = await repo.one("SELECT * FROM orders WHERE id=?", oid)
+    p = await repo.one("SELECT * FROM products WHERE id=?", o["product_id"])
     if items is None:
-        await repo.x("UPDATE users SET balance=balance+? WHERE id=?", o["amount"], o["user_id"])
-        await repo.x("UPDATE orders SET status='refunded' WHERE id=?", oid)
-        return await show_done(o, f"{header('Estoque esgotado', o['code'])}\nO produto acabou durante o pagamento.\n"
-                                  f"<b>{brl(o['amount'])}</b> foram creditados na sua carteira.", done_kb)
-    await repo.x("UPDATE orders SET status='delivered' WHERE id=?", oid)
+        items = [r["content"] for r in await repo.q("SELECT content FROM stock WHERE order_id=? ORDER BY id", oid)]
+    ms = None
+    if o["paid_at"]:
+        ms = int((datetime.utcnow() - datetime.fromisoformat(o["paid_at"])).total_seconds() * 1000)
+    await repo.x("UPDATE orders SET status='delivered', delivered_at=CURRENT_TIMESTAMP, delivery_ms=? WHERE id=?", ms, oid)
+    await olog(oid, "entregue ao cliente")
     await repo.x("UPDATE products SET sold=sold+? WHERE id=?", o["qty"], p["id"])
     await repo.x("UPDATE users SET spent=spent+? WHERE id=?", o["amount"], o["user_id"])
     if o["coupon"]:
         await repo.x("UPDATE coupons SET uses_left=uses_left-1 WHERE code=? AND uses_left>0", o["coupon"])
     u = await repo.one("SELECT ref_by FROM users WHERE id=?", o["user_id"])
     if u["ref_by"]:
-        bonus = round(o["amount"] * REF_BONUS_PCT / 100, 2)
-        await repo.x("UPDATE users SET balance=balance+?, ref_earned=ref_earned+? WHERE id=?", bonus, bonus, u["ref_by"])
-        try:
-            await bot.send_message(u["ref_by"], f"<b>Comissão recebida</b>\n+{brl(bonus)} de saldo por uma compra do seu indicado.",
-                                   reply_markup=kb([b("Ver minha conta", "me")]))
-        except Exception:
-            pass
-    body = "\n".join(f"<code>{i}</code>" for i in items)
-    until = (datetime.now() + timedelta(days=p["warranty_days"])).strftime("%d/%m/%Y")
-    cap = (f"✅ <b>Pagamento aprovado</b>\nPedido <code>{o['code']}</code>\n\n"
-           f"<b>{p['name']}</b>  ·  {o['qty']} un.\n{LINE}\n"
-           f"🔑 <b>Seu acesso</b>  <i>(toque para copiar)</i>\n{body}\n{LINE}\n"
-           f"🛡 Garantia até <b>{until}</b>\n"
-           f"📦 Reabra quando quiser em <b>Meus pedidos</b>")
-    await show_done(o, cap[:1024], done_kb)
-    if len(cap) > 1024:
-        await bot.send_message(o["user_id"], body)
+        bonus = round(o["amount"] * num("ref_pct") / 100, 2)
+        if bonus > 0:
+            await repo.credit(u["ref_by"], bonus, "comissao", o["code"])
+            await repo.x("UPDATE users SET ref_earned=ref_earned+? WHERE id=?", bonus, u["ref_by"])
+            try:
+                await bot.send_message(u["ref_by"], f"<b>Comissão recebida</b>\n+{brl(bonus)} de saldo por uma compra do seu indicado.",
+                                       reply_markup=kb([b("Ver minha conta", "me")]))
+            except Exception:
+                pass
+    await send_delivery(o, p, items)
     if CHANNEL_ID:
         try:
             await bot.send_message(CHANNEL_ID, f"🟢 Acabou de sair: <b>{p['name']}</b>")
         except Exception:
             pass
-    for a in ADMIN_IDS:
-        try:
-            await bot.send_message(a, f"💸 Venda {o['code']} · {p['name']} ×{o['qty']} · {brl(o['amount'])} · {o['method']}")
-        except Exception:
-            pass
+    await notify_admins(f"💸 Venda {o['code']} · {p['name']} ×{o['qty']} · {brl(o['amount'])} · {o['method']}")
+
+
+async def send_delivery(o, p, items, new=False):
+    body = "\n".join(f"<code>{i}</code>" for i in items)
+    until = (datetime.now() + timedelta(days=p["warranty_days"] or 0)).strftime("%d/%m/%Y")
+    cap = (f"✅ <b>Pagamento aprovado</b>\nPedido <code>{o['code']}</code>\n\n"
+           f"<b>{p['name']}</b>  ·  {o['qty']} un.\n{LINE}\n"
+           f"🔑 <b>Seu acesso</b>  <i>(toque para copiar)</i>\n{body}\n{LINE}\n"
+           f"🛡 Garantia até <b>{until}</b>\n"
+           f"📦 Reabra quando quiser em <b>Meus pedidos</b>")
+    await show_done(o, cap[:1024], done_kb(o), new=new)
+    if len(cap) > 1024:
+        await bot.send_message(o["user_id"], body)
+
+
+async def tick():
+    """Um ciclo do poller (também usado pelos testes)."""
+    await store.load(repo)
+    for o in await repo.q("SELECT * FROM orders WHERE status='pending' AND ext_id IS NOT NULL"):
+        await process(o)
+    for o in await repo.q("SELECT id FROM orders WHERE status='paid'"):
+        await deliver(o["id"])
+    # pedidos prontos pelo painel (fila manual / retorno de webhook)
+    for o in await repo.q("SELECT id FROM orders WHERE status='ready'"):
+        if await repo.run("UPDATE orders SET status='delivering' WHERE id=? AND status='ready'", o["id"]):
+            await finish(o["id"])
+    # reenviar entrega pedida no painel
+    for o in await repo.q("SELECT * FROM orders WHERE resend=1"):
+        await repo.x("UPDATE orders SET resend=0 WHERE id=?", o["id"])
+        p = await repo.one("SELECT * FROM products WHERE id=?", o["product_id"])
+        items = [r["content"] for r in await repo.q("SELECT content FROM stock WHERE order_id=? ORDER BY id", o["id"])]
+        items = items or ([p["unlimited"]] * o["qty"] if p and p["unlimited"] else [])
+        if p and items:
+            await send_delivery(o, p, items, new=True)
+    # webhook sem resposta no prazo → estorno
+    for o in await repo.q("SELECT * FROM orders WHERE status='awaiting' AND sent_at<=datetime('now', ?)",
+                          f"-{int(num('webhook_timeout_min'))} minutes"):
+        p = await repo.one("SELECT * FROM products WHERE id=?", o["product_id"])
+        await refund_fail(o, p, "webhook sem resposta no prazo")
 
 
 async def poller():
     while True:
         try:
-            for o in await repo.q("SELECT * FROM orders WHERE status='pending' AND ext_id IS NOT NULL"):
-                await process(o)
-            for o in await repo.q("SELECT id FROM orders WHERE status='paid'"):
-                await deliver(o["id"])
+            await tick()
         except Exception:
             logging.exception("poller")
         await asyncio.sleep(POLL_SECONDS)
@@ -520,13 +641,14 @@ async def topup_go(cb: CallbackQuery, state: FSMContext):
     await state.set_data({"kind": "topup", "uid": cb.from_user.id, "total": v, "usdt": await bp.brl_to_usdt(v)})
     d = await state.get_data()
     await screen(cb, "checkout", f"{header('Recarga')}\n<b>{brl(v)}</b>  ≈ {usd(d['usdt'])}\n\nComo quer pagar?",
-                 kb([b("⚡ Pix", "pay:pix")] + ([b("🟡 USDT", "pay:usdt")] if USDT_ON else []), back("topup")))
+                 kb(([b("⚡ Pix", "pay:pix")] if on("pix_on") else []) + ([b("🟡 USDT", "pay:usdt")] if on("usdt_on") else []),
+                    back("topup")))
 
 
 @router.callback_query(F.data == "orders")
 async def orders(cb: CallbackQuery):
     rows = await repo.q("SELECT o.*, p.name FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE user_id=? "
-                        "AND status IN('delivered','refunded') ORDER BY o.id DESC LIMIT 8", cb.from_user.id)
+                        "AND status IN('delivered','refunded','manual','awaiting') ORDER BY o.id DESC LIMIT 8", cb.from_user.id)
     btns = [[b(f"{'' if r['kind'] == 'buy' else 'Recarga · '}{r['code']} · {r['name'] or 'Saldo'} · {brl(r['amount'])}",
                f"od:{r['code']}")] for r in rows]
     await screen(cb, "profile", header("Meus pedidos", "Toque para reabrir a entrega") +
@@ -563,7 +685,7 @@ async def ref(cb: CallbackQuery):
     tot = await repo.one("SELECT COUNT(DISTINCT o.user_id) b, COALESCE(SUM(o.amount),0) v FROM orders o JOIN users x ON x.id=o.user_id "
                          "WHERE x.ref_by=? AND o.status='delivered' AND o.kind='buy'", cb.from_user.id)
     u = await repo.one("SELECT ref_earned FROM users WHERE id=?", cb.from_user.id)
-    cap = (f"{header('Indique e ganhe')}\nGanhe <b>{REF_BONUS_PCT:g}%</b> de comissão em saldo sobre toda compra de quem "
+    cap = (f"{header('Indique e ganhe')}\nGanhe <b>{num('ref_pct'):g}%</b> de comissão em saldo sobre toda compra de quem "
            f"entrar pelo seu link. Sem limite, para sempre.\n{LINE}\n"
            f"Indicados  <b>{n}</b>  ·  compradores <b>{tot['b']}</b>\nVendido pelos indicados  {brl(tot['v'])}\n"
            f"Comissão recebida  <b>{brl(u['ref_earned'])}</b>\n{LINE}\nSeu link\n<code>{link}</code>")
@@ -573,11 +695,9 @@ async def ref(cb: CallbackQuery):
 @router.callback_query(F.data == "sup")
 async def support(cb: CallbackQuery):
     rows = [[b("🛡 Acionar garantia de um pedido", "orders")]]
-    if SUPPORT_USERNAME:
-        rows.append([b("💬 Falar com atendente", url=f"https://t.me/{SUPPORT_USERNAME}")])
-    await screen(cb, "support", f"{header('Suporte')}\nProblema com um produto? Abra a garantia pelo pedido "
-                                "— repomos ou devolvemos em saldo.\n\n🕘 Atendimento humano todos os dias.",
-                 kb(*rows, back()))
+    if cfg("support_username"):
+        rows.append([b("💬 Falar com atendente", url=f"https://t.me/{cfg('support_username').lstrip('@')}")])
+    await screen(cb, "support", f"{header('Suporte')}\n{cfg('txt_support')}", kb(*rows, back()))
 
 
 @router.callback_query(F.data.startswith("tk:"))
@@ -591,12 +711,35 @@ async def ticket_start(cb: CallbackQuery, state: FSMContext):
 async def ticket_text(m: Message, state: FSMContext):
     d = await state.get_data()
     await state.clear()
-    tid = await repo.x("INSERT INTO tickets(user_id,order_code,text) VALUES(?,?,?)", m.from_user.id, d["code"], m.text)
+    text = m.text or m.caption or "(mídia)"
+    tid = await repo.x("INSERT INTO tickets(user_id,order_code,text,status,updated_at) VALUES(?,?,?,'aberto',CURRENT_TIMESTAMP)",
+                       m.from_user.id, d["code"], text)
+    await repo.x("INSERT INTO ticket_messages(ticket_id,sender,text) VALUES(?,?,?)", tid, "cliente", text)
     await m.answer(f"✅ Chamado <b>#{tid}</b> aberto para o pedido {d['code']}. Respondemos por aqui.",
                    reply_markup=kb([b("‹ Início", "home")]))
-    for a in ADMIN_IDS:
-        await bot.send_message(a, f"🎫 #{tid} · {d['code']} · {m.from_user.full_name} (<code>{m.from_user.id}</code>)\n"
-                                  f"{m.text}\n\nResponder: /responder {m.from_user.id} texto")
+    await notify_admins(f"🎫 Chamado novo #{tid} · {d['code']} · {m.from_user.full_name} (<code>{m.from_user.id}</code>)\n"
+                        f"{text}\n\nResponda pelo painel.")
+
+
+@router.callback_query(F.data.startswith("tr:"))
+async def ticket_reply_start(cb: CallbackQuery, state: FSMContext):
+    t = await repo.one("SELECT id FROM tickets WHERE id=? AND user_id=?", int(cb.data[3:]), cb.from_user.id)
+    if not t:
+        return await cb.answer()
+    await state.set_state(S.ticket_reply)
+    await state.update_data(tid=t["id"])
+    await cb.answer("Escreva sua resposta numa mensagem ✍️", show_alert=True)
+
+
+@router.message(S.ticket_reply)
+async def ticket_reply_text(m: Message, state: FSMContext):
+    tid = (await state.get_data())["tid"]
+    await state.clear()
+    text = m.text or m.caption or "(mídia)"
+    await repo.x("INSERT INTO ticket_messages(ticket_id,sender,text) VALUES(?,?,?)", tid, "cliente", text)
+    await repo.x("UPDATE tickets SET status='aberto', updated_at=CURRENT_TIMESTAMP WHERE id=?", tid)
+    await m.answer(f"✅ Resposta adicionada ao chamado <b>#{tid}</b>.", reply_markup=kb([b("‹ Início", "home")]))
+    await notify_admins(f"🎫 Resposta no chamado #{tid} · {m.from_user.full_name}\n{text}")
 
 
 # ───────────────────────── admin ─────────────────────────
@@ -715,14 +858,19 @@ async def a_sales(m: Message):
 @router.message(Command("credito"), admin_msg)
 async def a_credit(m: Message):
     uid, v = args(m, 2)[:2]
-    await repo.x("UPDATE users SET balance=balance+? WHERE id=?", float(v.replace(",", ".")), int(uid))
+    await repo.credit(int(uid), float(v.replace(",", ".")), "ajuste: /credito no Telegram")
     await m.answer("OK")
 
 
 @router.message(Command("responder"), admin_msg)
 async def a_reply(m: Message):
     _, uid, txt = m.text.split(maxsplit=2)
-    await bot.send_message(int(uid), f"💬 <b>Suporte VEXA</b>\n{txt}")
+    t = await repo.one("SELECT id FROM tickets WHERE user_id=? AND status!='resolvido' ORDER BY id DESC LIMIT 1", int(uid))
+    await bot.send_message(int(uid), f"💬 <b>Suporte VEXA</b>\n{txt}",
+                           reply_markup=kb([b("Responder", f"tr:{t['id']}")]) if t else None)
+    if t:
+        await repo.x("INSERT INTO ticket_messages(ticket_id,sender,staff,text) VALUES(?,?,?,?)", t["id"], "suporte", "telegram", txt)
+        await repo.x("UPDATE tickets SET status='respondido', updated_at=CURRENT_TIMESTAMP WHERE id=?", t["id"])
     await m.answer("Enviado.")
 
 
@@ -760,6 +908,9 @@ async def on_error(ev):
 async def main():
     global repo, bot
     repo = Repo(await connect())
+    await store.load(repo)
+    # pedidos interrompidos por queda no meio da entrega voltam para a fila (entrega é idempotente)
+    await repo.x("UPDATE orders SET status='paid' WHERE status='delivering'")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
     dp.include_router(router)

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS products(
 CREATE TABLE IF NOT EXISTS stock(
   id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER, content TEXT, sold INTEGER DEFAULT 0, order_id INTEGER);
 CREATE TABLE IF NOT EXISTS coupons(
-  code TEXT PRIMARY KEY, pct REAL, uses_left INTEGER DEFAULT -1, active INTEGER DEFAULT 1);
+  code TEXT PRIMARY KEY, pct REAL, uses_left INTEGER DEFAULT -1, active INTEGER DEFAULT 1, expires_at TEXT);
 CREATE TABLE IF NOT EXISTS orders(
   id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, user_id INTEGER, kind TEXT, product_id INTEGER,
   qty INTEGER DEFAULT 1, amount REAL, discount REAL DEFAULT 0, coupon TEXT, method TEXT, usdt REAL,
@@ -24,42 +24,63 @@ CREATE TABLE IF NOT EXISTS orders(
   created_at TEXT DEFAULT CURRENT_TIMESTAMP, paid_at TEXT);
 CREATE TABLE IF NOT EXISTS tickets(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, order_code TEXT, text TEXT,
-  status TEXT DEFAULT 'open', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+  status TEXT DEFAULT 'aberto', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS media(key TEXT PRIMARY KEY, file_id TEXT);
 CREATE TABLE IF NOT EXISTS suppliers(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, kind TEXT DEFAULT 'telegram', config TEXT DEFAULT '{}',
-  link TEXT DEFAULT '', notes TEXT DEFAULT '', active INTEGER DEFAULT 1);
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, kind TEXT DEFAULT 'manual', config TEXT DEFAULT '{}',
+  link TEXT DEFAULT '', contact TEXT DEFAULT '', notes TEXT DEFAULT '', active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS ledger(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, delta REAL, reason TEXT, ref TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS expenses(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT, amount REAL, category TEXT DEFAULT '',
-  day TEXT DEFAULT (date('now')));
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS ticket_messages(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER, sender TEXT, staff TEXT, text TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS panel_users(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, pass_hash TEXT, role TEXT DEFAULT 'atendente',
+  must_change INTEGER DEFAULT 1, active INTEGER DEFAULT 1, last_login TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS panel_sessions(
+  token_hash TEXT PRIMARY KEY, user_id INTEGER, csrf TEXT, ip TEXT, expires_at TEXT);
+CREATE TABLE IF NOT EXISTS login_fail(key TEXT PRIMARY KEY, count INTEGER DEFAULT 0, locked_until TEXT);
+CREATE TABLE IF NOT EXISTS audit(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, who TEXT, action TEXT, entity TEXT, entity_id TEXT, detail TEXT, ip TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 """
 
 MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN ref_earned REAL DEFAULT 0",
-    "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
-    "ALTER TABLE users ADD COLUMN notes TEXT DEFAULT ''",
     "ALTER TABLE products ADD COLUMN cost REAL DEFAULT 0",
+    "ALTER TABLE products ADD COLUMN delivery_mode TEXT DEFAULT 'estoque'",
     "ALTER TABLE products ADD COLUMN supplier_id INTEGER",
-    "ALTER TABLE products ADD COLUMN supplier_ref TEXT DEFAULT ''",
+    "ALTER TABLE products ADD COLUMN sku TEXT DEFAULT ''",
     "ALTER TABLE products ADD COLUMN ref_link TEXT DEFAULT ''",
     "ALTER TABLE products ADD COLUMN notes TEXT DEFAULT ''",
     "ALTER TABLE products ADD COLUMN sort INTEGER DEFAULT 0",
-    "ALTER TABLE categories ADD COLUMN active INTEGER DEFAULT 1",
     "ALTER TABLE orders ADD COLUMN cost REAL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN supplier_id INTEGER",
     "ALTER TABLE orders ADD COLUMN supplier_log TEXT DEFAULT ''",
-    "ALTER TABLE tickets ADD COLUMN reply TEXT DEFAULT ''",
+    "ALTER TABLE orders ADD COLUMN sent_at TEXT",
+    "ALTER TABLE orders ADD COLUMN delivered_at TEXT",
+    "ALTER TABLE orders ADD COLUMN delivery_ms INTEGER",
+    "ALTER TABLE orders ADD COLUMN resend INTEGER DEFAULT 0",
+    "ALTER TABLE coupons ADD COLUMN expires_at TEXT",
+    "ALTER TABLE tickets ADD COLUMN updated_at TEXT",
+    "UPDATE tickets SET status='aberto' WHERE status='open'",
+    "CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status)",
+    "CREATE INDEX IF NOT EXISTS ix_orders_user ON orders(user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_stock_order ON stock(order_id)",
+    "CREATE INDEX IF NOT EXISTS ix_stock_prod ON stock(product_id, sold)",
+    "CREATE INDEX IF NOT EXISTS ix_ledger_user ON ledger(user_id)",
 ]
 
 
 async def connect():
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-    db = await aiosqlite.connect(DB_PATH)
+    db = await aiosqlite.connect(DB_PATH, timeout=15)
     db.row_factory = aiosqlite.Row
+    # WAL: bot e painel (processos diferentes) leem/escrevem no mesmo arquivo
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA busy_timeout=15000")
     await db.executescript(SCHEMA)
     for sql in MIGRATIONS:
         try:
@@ -114,9 +135,9 @@ class Repo:
         await self.x("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", key, value)
 
     async def stock(self, pid):
-        p = await self.one("SELECT unlimited, supplier_id FROM products WHERE id=?", pid)
-        if p and (p["unlimited"] or p["supplier_id"]):
-            return None  # ilimitado ou comprado no fornecedor na hora
+        p = await self.one("SELECT unlimited, delivery_mode FROM products WHERE id=?", pid)
+        if p and (p["unlimited"] or (p["delivery_mode"] or "estoque") != "estoque"):
+            return None  # ilimitado ou entregue pelo fornecedor/manual
         return (await self.one("SELECT COUNT(*) c FROM stock WHERE product_id=? AND sold=0", pid))["c"]
 
     async def take_stock(self, pid, qty, order_id):

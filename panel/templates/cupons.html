@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Cupons{% endblock %}{% block h1 %}Cupons{% endblock %}
+{% block body %}
+<form class="card row" method="post" action="/cupons/salvar">{{ csrf() }}
+<div><label>Código</label><input name="code" required placeholder="VEXA10" style="text-transform:uppercase"></div>
+<div><label>Desconto (%)</label><input name="pct" inputmode="decimal" required placeholder="10"></div>
+<div><label>Limite de usos (vazio = ilimitado)</label><input name="uses" type="number" min="0"></div>
+<div><label>Validade (até)</label><input name="expires_at" type="date"></div>
+<div style="flex:0"><button class="btn grad">Salvar</button></div></form>
+<div class="card"><div class="tw"><table><tr><th>Código</th><th class="r">%</th><th class="r">Usos restantes</th><th class="r">Usado</th><th>Validade</th><th>Status</th><th></th></tr>
+{% for c in rows %}<tr><td><code>{{ c.code }}</code></td><td class="r">{{ c.pct|pct }}</td><td class="r">{{ '∞' if c.uses_left < 0 else c.uses_left }}</td><td class="r">{{ c.usados }}</td>
+<td>{{ c.expires_at[8:10] ~ '/' ~ c.expires_at[5:7] ~ '/' ~ c.expires_at[0:4] if c.expires_at else '—' }}</td>
+<td>{% if c.active %}<span class="pill green">Ativo</span>{% else %}<span class="pill gray">Inativo</span>{% endif %}</td>
+<td class="r"><form method="post" action="/cupons/{{ c.code }}/alternar">{{ csrf() }}<button class="btn ghost sm">{{ 'Desativar' if c.active else 'Ativar' }}</button></form></td></tr>
+{% else %}<tr><td colspan="7" class="muted">Nenhum cupom.</td></tr>{% endfor %}</table></div>
+<p class="small muted">Para editar, salve de novo com o mesmo código.</p></div>
+{% endblock %}

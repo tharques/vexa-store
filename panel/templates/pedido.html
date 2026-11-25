@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% block title %}{{ o.code }}{% endblock %}{% block h1 %}Pedido {{ o.code }}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/pedidos">‹ Pedidos</a>{% endblock %}
+{% block body %}
+<div class="grid g2" style="align-items:start"><div>
+<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">{{ o.pname or 'Recarga de saldo' }}{% if o.qty > 1 %} ×{{ o.qty }}{% endif %}</h2>{{ st(o.status) }}</div>
+<table style="margin-top:10px">
+<tr><td class="muted">Cliente</td><td>{% if u.role == 'admin' %}<a href="/clientes/{{ o.user_id }}">{{ o.uname or o.user_id }}</a>{% else %}{{ o.uname or o.user_id }}{% endif %} {% if o.username %}<span class="muted">@{{ o.username }}</span>{% endif %}</td></tr>
+<tr><td class="muted">Valor</td><td><b>{{ o.amount|brl }}</b>{% if o.discount %} <span class="muted">(desconto {{ o.discount|brl }} · {{ o.coupon }})</span>{% endif %}</td></tr>
+{% if u.role == 'admin' %}<tr><td class="muted">Custo · lucro</td><td>{{ (o.cost or 0)|brl }} · <b class="pos">{{ (o.amount - (o.cost or 0))|brl }}</b></td></tr>{% endif %}
+<tr><td class="muted">Forma</td><td>{{ o.method or '—' }}{% if o.ext_id %} <code>{{ o.ext_id }}</code>{% endif %}</td></tr>
+<tr><td class="muted">Fornecedor</td><td>{{ o.sname or '—' }}{% if o.slink %} · <a href="{{ o.slink }}" target="_blank" rel="noopener noreferrer">abrir ↗</a>{% endif %}</td></tr>
+{% if o.delivery_ms %}<tr><td class="muted">Tempo de entrega</td><td>{{ '%.1f'|format(o.delivery_ms / 1000) }} s</td></tr>{% endif %}
+</table></div>
+<div class="card"><h2>Linha do tempo</h2><ul class="timeline">
+{% for label, ts in timeline %}<li><span class="dot {{ 'on' if ts }}"></span><div><b>{{ label }}</b><div class="small muted">{{ ts|dt if ts else '—' }}</div></div></li>{% endfor %}
+{% if o.status == 'refunded' %}<li><span class="dot on"></span><div><b>Estornado em saldo</b></div></li>{% endif %}</ul></div>
+{% if o.supplier_log %}<div class="card"><h2>Resposta do fornecedor</h2><pre>{{ o.supplier_log }}</pre></div>{% endif %}
+</div><div>
+{% if items %}<div class="card"><h2>Entrega</h2>{% for i in items %}<div style="margin-bottom:6px"><code>{{ i }}</code></div>{% endfor %}</div>
+{% elif o.unlimited and o.status == 'delivered' %}<div class="card"><h2>Entrega</h2><code>{{ o.unlimited }}</code></div>{% endif %}
+{% if o.kind == 'buy' and o.status in ('manual','awaiting','paid') %}
+<form class="card" method="post" action="/pedidos/{{ o.id }}/entregar">{{ csrf() }}<h2>Marcar como entregue</h2>
+{% if o.ref_link %}<p><a href="{{ o.ref_link }}" target="_blank" rel="noopener noreferrer">Abrir link de referência ↗</a></p>{% endif %}
+<div class="f"><label>Entrega ({{ o.qty }} linha(s): texto, link ou código)</label><textarea name="items" required></textarea></div>
+<button class="btn grad">Entregar ao cliente</button></form>{% endif %}
+{% if o.status == 'delivered' %}<form class="card" method="post" action="/pedidos/{{ o.id }}/reenviar">{{ csrf() }}<h2>Reenviar entrega</h2>
+<p class="small muted">O bot manda a entrega de novo para o cliente.</p><button class="btn">Reenviar</button></form>{% endif %}
+{% if u.role == 'admin' and o.status in ('delivered','manual','awaiting','paid') %}
+<form class="card" method="post" action="/pedidos/{{ o.id }}/estornar" onsubmit="return confirm('Estornar {{ o.amount|brl }} em saldo?')">{{ csrf() }}
+<h2>Estornar em saldo</h2><div class="f"><label>Motivo (obrigatório)</label><input name="motivo" required></div>
+<button class="btn red">Estornar {{ o.amount|brl }}</button></form>{% endif %}
+</div></div>
+{% endblock %}

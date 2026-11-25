@@ -9,18 +9,28 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
 - Nunca commitar `.env`, `data/` nem chaves. Segredos só em GitHub Secrets.
 
 ## Stack e arquivos
-- Python 3.12, aiogram 3.13, SQLite (aiosqlite). Entrada: `python -m bot.main`. Docker + compose.
-- `bot/main.py` — handlers. Padrão **tela única**: `screen()` edita a mesma mensagem (banner + legenda +
-  teclado inline). Banners em `assets/banners/*.png`; file_id cacheado na tabela `media`.
-- `bot/ui.py` — identidade: `header()`, `LINE`, `brl()`, `usd()`, `bar()`, níveis, menu inicial.
-- `bot/asaas.py` — Pix: cliente (CPF validado, pedido só na 1ª compra) → cobrança PIX → QR + copia-e-cola → status.
-- `bot/binance_pay.py` — USDT: cotação USDTBRL da Binance (+`USDT_SPREAD`), criar/consultar pedido (HMAC-SHA512).
-- `bot/db.py` — schema (users, categories, products, stock, coupons, orders, tickets, media) e reserva atômica de estoque.
-- Poller a cada `POLL_SECONDS` confirma pagamentos e entrega; recupera pedidos `paid` após queda.
-- `SANDBOX=1` simula pagamento aprovado (testes). Produção: `SANDBOX=0`.
-- `python -m tests.sim` — simulação ponta a ponta (admin + 10 clientes, Telegram falso, todos os botões,
-  Pix/USDT/saldo/recarga/cupom/garantia, corridas de duplo clique e última unidade). Roda no CI antes do deploy;
-  rode sempre após mudar o bot.
+- Python 3.12, aiogram 3.13, SQLite (aiosqlite, **WAL**: bot e painel usam o mesmo `data/store.db`). Docker + compose.
+- Serviços no compose: `vexa` (bot, `python -m bot.main`), `painel` (FastAPI/uvicorn, porta 8000 só interna) e
+  `caddy` (profile `https`, HTTPS automático para `vexa.traxor.pro`; DNS A já criado na Hostinger → 161.97.143.189).
+- `bot/main.py` — handlers. Padrão **tela única**: `screen()` edita a mesma mensagem. `tick()` = 1 ciclo do poller
+  (confirma pagamentos, entrega `paid`, conclui `ready` vindos do painel, reenvios, estorna webhook vencido).
+- `bot/fornecedores.py` — camada de fornecedores. Modo de entrega por produto: **estoque** (reserva atômica),
+  **api** (URL/método/headers/corpo com `{sku}{qtd}{pedido}`, `{secret:NOME}` lê `SUP_NOME` do .env, caminho JSON,
+  3 tentativas, `Idempotency-Key` = código do pedido), **webhook** (POST com HMAC-SHA256 em `X-Vexa-Signature`;
+  retorno em `POST /webhook/{id}` do painel) e **manual** (fila manual). Falhou → estorno automático em saldo + avisos.
+  Log do fornecedor fica no pedido sem segredos (`redact`). Sem userbot e sem integração com Nimo (vetado pelo dono).
+- `bot/store.py` — configurações editáveis no painel (tabela `settings`): nome, @suporte, % indicação, expiração,
+  Pix/USDT on/off, prazo manual, textos do bot. O bot recarrega a cada ciclo.
+- `bot/db.py` — schema + migrações. `repo.credit/debit` movimentam saldo **sempre** com registro em `ledger`
+  (recarga, compra, comissao, estorno, ajuste: motivo).
+- `panel/app.py` + `panel/auth.py` + `panel/templates/` — painel (Jinja2 + HTMX/Alpine, identidade VEXA).
+  Login bcrypt, bloqueio 15 min após 5 erros (por usuário e IP), aviso de login no Telegram, cookie HttpOnly/Secure/
+  SameSite=Lax 12 h, CSRF em todo POST, papéis admin/atendente (**nega por padrão**: rota sem papel = só admin),
+  auditoria de toda alteração (tabela `audit`). 1º início cria `thiago` com senha temporária enviada só no Telegram.
+  O painel não entrega direto: grava itens + status `ready`/`resend=1` e o bot envia na tela de entrega.
+- `bot/asaas.py` (Pix + `received()` para conferência), `bot/binance_pay.py` (USDT), `bot/ui.py` (identidade).
+- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 141 checagens. Roda no CI
+  antes do deploy; rode sempre após mudar bot ou painel.
 
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)
 Catálogo por categoria com paginação · card de produto (preço antigo riscado, estoque,
@@ -37,12 +47,11 @@ fonte Inter. Arquivos: `assets/logo.png` (avatar), `icon.png`, `wordmark-light/d
 Tom: limpo, estilo Stripe. Nada de "◆" ou linhas longas; títulos em negrito + código do pedido em `<code>`.
 
 ## Deploy (VPS Contabo 161.97.143.189, root) — via GitHub Actions
-`.github/workflows/deploy.yml`: a cada push em `main`, entra por SSH na VPS, instala Docker se faltar,
-clona em `/opt/vexa`, grava `.env` a partir do secret e roda `docker compose up -d --build`.
-Secrets necessários no repositório (o Thiago cadastra; você não digita senhas/tokens em sites):
-- `VPS_HOST` = 161.97.143.189 · `VPS_PASSWORD` = senha root (ou `VPS_SSH_KEY`) · `ENV_FILE` = conteúdo do .env
-A sandbox do Claude Code não alcança a VPS por SSH direto; use o workflow (`gh workflow run deploy`) e
-acompanhe com `gh run watch`. A VPS também roda o bot "Gestor" (OpenClaw) — não mexer nele.
+`.github/workflows/deploy.yml`: a cada push em `main`, roda a simulação, entra por SSH na VPS, clona em `/opt/vexa`,
+grava `.env` a partir do secret e sobe o compose. **Antes do Caddy verifica 80/443**: se outro serviço estiver usando,
+não sobe o Caddy (avisa no log) e mantém bot + painel. Secrets: `VPS_HOST`, `VPS_PASSWORD` (ou `VPS_SSH_KEY`), `ENV_FILE`.
+ENV_FILE opcional: `PANEL_DOMAIN` (padrão vexa.traxor.pro) e `SUP_<NOME>=chave` para cada fornecedor API.
+A VPS também roda o bot "Gestor" (OpenClaw) — não mexer em nada fora de /opt/vexa.
 
 ## Pendências — atualizado 24/11/2026 22h
 Bot **no ar** na VPS (deploy verde, /start, botões e /admin testados no Telegram). Descrição do BotFather já fala em Pix.

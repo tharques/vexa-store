@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install -r requirements.txt && python -m compileall -q bot
+      - run: pip install -r requirements.txt && python -m compileall -q bot panel
       - name: Simulação ponta a ponta (10 clientes)
         run: python -m tests.sim
       - name: Secrets faltando
@@ -34,12 +34,22 @@ jobs:
             # escapa '$' (docker compose interpola variáveis no env_file; chave Asaas começa com '$')
             printf '%s\n' "$ENV_FILE" | sed 's/\$\$/$/g; s/\$/$$/g' > .env
             chmod 600 .env
-            docker compose up -d --build 2>&1 | grep -v 'variable is not set' || true
-            docker compose ps
-            echo "---- aguardando 15s e conferindo o bot ----"
-            sleep 15
-            docker compose ps -a
-            docker compose logs --tail 50 2>&1 | sed -E 's/[0-9]{8,}:[A-Za-z0-9_-]{30,}/***TOKEN***/g; s/\$?aact_[A-Za-z0-9_=:$-]+/***ASAAS***/g'
+            # Caddy (HTTPS do painel) só sobe se 80/443 estiverem livres ou já forem do nosso Caddy
+            OURS=$(docker compose --profile https ps -q caddy 2>/dev/null || true)
+            BUSY=$(ss -ltnH '( sport = :80 or sport = :443 )' 2>/dev/null || true)
+            if [ -n "$BUSY" ] && [ -z "$OURS" ]; then
+              echo "::warning::Portas 80/443 já em uso na VPS por outro serviço. Caddy NÃO foi iniciado; nada foi derrubado."
+              ss -ltnp '( sport = :80 or sport = :443 )' | sed -E 's/pid=[0-9]+,//g' || true
+              docker compose up -d --build vexa painel 2>&1 | grep -v 'variable is not set' || true
+            else
+              docker compose --profile https up -d --build 2>&1 | grep -v 'variable is not set' || true
+            fi
+            echo "---- aguardando 20s e conferindo bot, painel e HTTPS ----"
+            sleep 20
+            docker compose --profile https ps -a
+            docker compose --profile https logs --tail 40 2>&1 | sed -E 's/[0-9]{8,}:[A-Za-z0-9_-]{30,}/***TOKEN***/g; s/\$?aact_[A-Za-z0-9_=:$-]+/***ASAAS***/g; s/(Senha|senha|password)[^ ]*[:=] *[^ ]+/\1 ***/g'
+            curl -s -o /dev/null -w "painel interno: HTTP %{http_code}\n" --max-time 10 -H "Host: ${PANEL_DOMAIN:-vexa.traxor.pro}" http://127.0.0.1/health || true
+            curl -s -o /dev/null -w "painel HTTPS: HTTP %{http_code}\n" --max-time 20 https://${PANEL_DOMAIN:-vexa.traxor.pro}/health || true
     env:
       HAS_VPS: ${{ secrets.VPS_HOST != '' && (secrets.VPS_PASSWORD != '' || secrets.VPS_SSH_KEY != '') && secrets.ENV_FILE != '' }}
       ENV_FILE: ${{ secrets.ENV_FILE }}

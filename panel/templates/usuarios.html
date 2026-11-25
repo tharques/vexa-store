@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Usuários{% endblock %}{% block h1 %}Usuários do painel{% endblock %}
+{% block body %}
+{% if newpw %}<div class="card" style="border-color:var(--brand)"><b>Senha temporária (aparece só agora):</b> <code style="font-size:14px">{{ newpw }}</code>
+<p class="small muted" style="margin:6px 0 0">Passe para a pessoa por um canal seguro. Ela troca no primeiro acesso.</p></div>{% endif %}
+<div class="card"><div class="tw"><table><tr><th>Usuário</th><th>Papel</th><th>Status</th><th class="hide-m">Último acesso</th><th></th></tr>
+{% for r in rows %}<tr x-data="{e:false}"><td><b>{{ r.username }}</b>{% if r.must_change %} <span class="pill amber">troca de senha pendente</span>{% endif %}</td>
+<td>{{ ROLES[r.role] }}</td><td>{% if r.active %}<span class="pill green">Ativo</span>{% else %}<span class="pill gray">Inativo</span>{% endif %}</td>
+<td class="hide-m muted">{{ r.last_login|dt }}</td><td class="r"><button class="btn ghost sm" @click="e=!e">Editar</button>
+<form x-show="e" x-cloak style="margin-top:8px;text-align:left" method="post" action="/usuarios/salvar">{{ csrf() }}<input type="hidden" name="id" value="{{ r.id }}">
+<div class="f"><select name="role">{% for k, v in ROLES.items() %}<option value="{{ k }}" {{ 'selected' if r.role == k }}>{{ v }}</option>{% endfor %}</select></div>
+<label><input type="checkbox" name="active" {{ 'checked' if r.active }}>Ativo</label><label><input type="checkbox" name="reset">Gerar nova senha temporária</label>
+<button class="btn sm" style="margin-top:6px">Salvar</button></form></td></tr>{% endfor %}</table></div></div>
+<form class="card row" method="post" action="/usuarios/salvar">{{ csrf() }}<div><label>Novo usuário</label><input name="username" required placeholder="nome.sobrenome"></div>
+<div><label>Papel</label><select name="role"><option value="atendente">Atendente (chamados e pedidos)</option><option value="admin">Administrador (tudo)</option></select></div>
+<div style="flex:0"><button class="btn grad">Criar</button></div></form>
+{% endblock %}

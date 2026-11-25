@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block title %}Fornecedores{% endblock %}{% block h1 %}Fornecedores{% endblock %}
+{% block actions %}<a class="btn grad" href="/fornecedores/novo">+ Novo fornecedor</a>{% endblock %}
+{% block body %}<div class="card"><div class="tw"><table>
+<tr><th>Nome</th><th>Tipo</th><th>Produtos</th><th>Contato</th><th>Link</th><th></th></tr>
+{% for s in sups %}<tr><td><a href="/fornecedores/{{ s.id }}"><b>{{ s.name }}</b></a></td><td>{{ s.kind }}</td><td>{{ s.n }}</td><td>{{ s.contact or '—' }}</td>
+<td>{% if s.link %}<a href="{{ s.link }}" target="_blank" rel="noopener noreferrer">abrir ↗</a>{% else %}—{% endif %}</td>
+<td>{% if s.active %}<span class="pill green">Ativo</span>{% else %}<span class="pill gray">Inativo</span>{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Nenhum fornecedor cadastrado.</td></tr>{% endfor %}</table></div></div>{% endblock %}

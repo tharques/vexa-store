@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block title %}Avisos{% endblock %}{% block h1 %}Avisos em massa{% endblock %}
+{% block body %}
+{% if prev %}
+<form class="card" method="post" action="/avisos/enviar" onsubmit="return confirm('Enviar para {{ prev.n }} cliente(s)?')">{{ csrf() }}
+<h2>Prévia</h2><p>Público: <b>{{ filters[prev.filtro] }}</b> · <b>{{ prev.n }}</b> cliente(s)</p>
+<div class="msg cliente" style="max-width:420px;white-space:pre-wrap">{{ prev.text }}</div>
+<input type="hidden" name="text" value="{{ prev.text }}"><input type="hidden" name="filtro" value="{{ prev.filtro }}"><input type="hidden" name="produto" value="{{ prev.pid or '' }}">
+<div class="row" style="margin-top:12px"><div style="flex:0"><button class="btn grad" {{ 'disabled' if not prev.n }}>Enviar agora</button></div><div style="flex:0"><a class="btn ghost" href="/avisos">Voltar</a></div></div></form>
+{% else %}
+<form class="card" method="post" action="/avisos/previa" x-data="{f:'todos'}">{{ csrf() }}
+<div class="row f"><div><label>Público</label><select name="filtro" x-model="f">{% for k, v in filters.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+<div x-show="f=='produto'"><label>Produto</label><select name="produto"><option value="">—</option>{% for p in prods %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div></div>
+<div class="f"><label>Mensagem (aceita &lt;b&gt;negrito&lt;/b&gt;, &lt;i&gt;itálico&lt;/i&gt;, links)</label><textarea name="text" required style="min-height:140px"></textarea></div>
+<button class="btn grad">Ver prévia e contagem</button></form>
+{% if hist %}<div class="card"><h2>Últimos envios</h2><table>{% for h in hist %}<tr><td class="small muted">{{ h.created_at|dt }}</td><td>{{ h.who }}</td><td>{{ h.entity_id }}</td><td class="small">{{ h.detail[:120] }}</td></tr>{% endfor %}</table></div>{% endif %}
+{% endif %}
+{% endblock %}

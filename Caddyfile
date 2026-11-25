@@ -1,0 +1,8 @@
+{$PANEL_DOMAIN:vexa.traxor.pro} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy painel:8000
+}

@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block title %}Auditoria{% endblock %}{% block h1 %}Auditoria{% endblock %}
+{% block body %}
+<form class="card row" method="get"><div><label>Buscar</label><input name="q" value="{{ q }}" placeholder="usuário, ação, pedido, produto…"></div><div style="flex:0"><button class="btn">Buscar</button></div></form>
+<div class="card"><div class="tw"><table><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Alvo</th><th>Detalhe</th><th class="hide-m">IP</th></tr>
+{% for a in rows %}<tr><td class="small muted" style="white-space:nowrap">{{ a.created_at|dt }}</td><td>{{ a.who }}</td><td>{{ a.action }}</td><td class="small">{{ a.entity }} {{ a.entity_id }}</td>
+<td class="small" style="max-width:420px;word-break:break-word">{{ a.detail }}</td><td class="hide-m small muted">{{ a.ip }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Nada registrado.</td></tr>{% endfor %}</table></div></div>
+{% endblock %}

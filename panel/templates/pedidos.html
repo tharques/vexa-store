@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Pedidos{% endblock %}{% block h1 %}Pedidos{% endblock %}
+{% block body %}
+<form class="card row" method="get">
+<div><label>De</label><input type="date" name="de" value="{{ qp.get('de','') }}"></div>
+<div><label>Até</label><input type="date" name="ate" value="{{ qp.get('ate','') }}"></div>
+<div><label>Status</label><select name="status"><option value="">Todos</option>{% for k, v in STATUS.items() %}<option value="{{ k }}" {{ 'selected' if qp.get('status') == k }}>{{ v[0] }}</option>{% endfor %}</select></div>
+<div><label>Forma</label><select name="metodo"><option value="">Todas</option>{% for m in ['pix','usdt','saldo'] %}<option {{ 'selected' if qp.get('metodo') == m }}>{{ m }}</option>{% endfor %}</select></div>
+<div><label>Produto</label><select name="produto"><option value="">Todos</option>{% for p in prods %}<option value="{{ p.id }}" {{ 'selected' if qp.get('produto') == p.id|string }}>{{ p.name }}</option>{% endfor %}</select></div>
+<div><label>Cliente / código</label><input name="cliente" value="{{ qp.get('cliente','') }}" placeholder="ID, @, nome ou VX-..."></div>
+<div style="flex:0"><button class="btn">Filtrar</button></div></form>
+<div class="card"><div class="tw"><table>
+<tr><th>Pedido</th><th>Cliente</th><th>Item</th><th class="r">Valor</th><th class="r hide-m">Custo</th><th>Forma</th><th>Status</th><th class="hide-m">Criado</th></tr>
+{% for o in rows %}<tr><td><a href="/pedidos/{{ o.id }}">{{ o.code }}</a></td><td>{{ o.uname or '' }} {% if o.username %}<span class="muted">@{{ o.username }}</span>{% endif %}</td>
+<td>{{ o.pname or 'Recarga' }}{% if o.qty > 1 %} ×{{ o.qty }}{% endif %}</td><td class="r">{{ o.amount|brl }}</td><td class="r hide-m">{{ (o.cost or 0)|brl }}</td>
+<td>{{ o.method or '—' }}</td><td>{{ st(o.status) }}</td><td class="hide-m muted">{{ o.created_at|dt }}</td></tr>
+{% else %}<tr><td colspan="8" class="muted">Nenhum pedido encontrado.</td></tr>{% endfor %}</table></div>
+<p class="small muted">Mostrando até 300 pedidos.</p></div>
+{% endblock %}

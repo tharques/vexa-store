@@ -1,0 +1,25 @@
+{% extends "base.html" %}{% block title %}{{ c.name }}{% endblock %}{% block h1 %}{{ c.name or c.id }}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/clientes">‹ Clientes</a>{% endblock %}
+{% block body %}
+<div class="grid g4" style="margin-bottom:16px">
+<div class="kpi hl"><div class="l">Saldo</div><div class="v">{{ c.balance|brl }}</div></div>
+<div class="kpi"><div class="l">Total gasto</div><div class="v">{{ c.spent|brl }}</div></div>
+<div class="kpi"><div class="l">Comissões</div><div class="v">{{ (c.ref_earned or 0)|brl }}</div></div>
+<div class="kpi"><div class="l">Indicados</div><div class="v">{{ refs|length }}</div></div></div>
+<div class="grid g2" style="align-items:start"><div>
+<div class="card"><h2>Dados</h2><table>
+<tr><td class="muted">Telegram</td><td>{% if c.username %}<a href="https://t.me/{{ c.username }}" target="_blank" rel="noopener noreferrer">@{{ c.username }}</a>{% else %}—{% endif %} · ID <code>{{ c.id }}</code></td></tr>
+<tr><td class="muted">Cliente desde</td><td>{{ c.created_at|dt }}</td></tr>
+<tr><td class="muted">Indicado por</td><td>{% if ref %}<a href="/clientes/{{ ref.id }}">{{ ref.name or ref.id }}</a>{% else %}—{% endif %}</td></tr>
+<tr><td class="muted">CPF</td><td>{{ 'cadastrado' if c.cpf else '—' }}</td></tr></table></div>
+<form class="card" method="post" action="/clientes/{{ c.id }}/saldo">{{ csrf() }}<h2>Ajustar saldo</h2>
+<div class="row f"><div style="max-width:150px"><label>Valor (R$, negativo debita)</label><input name="valor" inputmode="decimal" required placeholder="10,00"></div>
+<div><label>Motivo (obrigatório)</label><input name="motivo" required></div></div><button class="btn">Aplicar</button></form>
+{% if refs %}<div class="card"><h2>Indicados</h2><table>{% for r in refs %}<tr><td><a href="/clientes/{{ r.id }}">{{ r.name or r.id }}</a></td><td class="r">{{ r.spent|brl }} gastos</td></tr>{% endfor %}</table></div>{% endif %}
+</div><div>
+<div class="card"><h2>Compras</h2><div class="tw"><table>{% for o in orders %}<tr><td><a href="/pedidos/{{ o.id }}">{{ o.code }}</a><div class="small muted">{{ o.created_at|dt }}</div></td>
+<td>{{ o.pname or 'Recarga' }}</td><td class="r">{{ o.amount|brl }}</td><td>{{ st(o.status) }}</td></tr>{% else %}<tr><td class="muted">Sem pedidos.</td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>Extrato da carteira</h2><div class="tw"><table>{% for l in ledger %}<tr><td class="small muted">{{ l.created_at|dt }}</td><td>{{ l.reason }}{% if l.ref %} <span class="muted small">{{ l.ref }}</span>{% endif %}</td>
+<td class="r {{ 'pos' if l.delta > 0 else 'neg' }}">{{ l.delta|brl }}</td></tr>{% else %}<tr><td class="muted">Sem movimentações registradas.</td></tr>{% endfor %}</table></div></div>
+</div></div>
+{% endblock %}

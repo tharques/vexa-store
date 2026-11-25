@@ -1,0 +1,38 @@
+{% extends "base.html" %}{% block title %}Financeiro{% endblock %}{% block h1 %}Financeiro{% endblock %}
+{% block body %}
+{% macro mg(f, c) %}{% set f = f or 0 %}{% set c = c or 0 %}<td class="r">{{ f|brl }}</td><td class="r">{{ c|brl }}</td><td class="r pos">{{ (f-c)|brl }}</td><td class="r">{{ ((f-c)/f*100 if f else 0)|pct }}</td>{% endmacro %}
+<form class="card row" method="get"><div><label>De</label><input type="date" name="de" value="{{ de }}"></div><div><label>Até</label><input type="date" name="ate" value="{{ ate }}"></div>
+<div style="flex:0"><button class="btn">Aplicar</button></div>
+<div style="flex:0"><a class="btn ghost" href="/financeiro/csv?tipo=pedidos&de={{ de }}&ate={{ ate }}">CSV pedidos</a></div>
+<div style="flex:0"><a class="btn ghost" href="/financeiro/csv?tipo=extrato&de={{ de }}&ate={{ ate }}">CSV extrato</a></div></form>
+{% set entradas = methods|selectattr('method','in',['pix','usdt'])|sum(attribute='v') %}
+<div class="grid g4" style="margin-bottom:16px">
+<div class="kpi hl"><div class="l">Faturamento ({{ tot.n }} vendas)</div><div class="v">{{ tot.fat|brl }}</div><div class="s">Margem {{ ((tot.lucro/tot.fat*100) if tot.fat else 0)|pct }}</div></div>
+<div class="kpi"><div class="l">Custo</div><div class="v">{{ tot.custo|brl }}</div></div>
+<div class="kpi"><div class="l">Lucro</div><div class="v pos">{{ tot.lucro|brl }}</div></div>
+<div class="kpi"><div class="l">Entradas Pix + USDT</div><div class="v">{{ entradas|brl }}</div><div class="s">dinheiro novo no período</div></div></div>
+<div class="grid g4" style="margin-bottom:16px">
+<div class="kpi"><div class="l">Recargas de saldo</div><div class="v">{{ (led.recarga.v if led.recarga else 0)|brl }}</div><div class="s">{{ led.recarga.n if led.recarga else 0 }} recarga(s)</div></div>
+<div class="kpi"><div class="l">Comissões pagas</div><div class="v">{{ (led.comissao.v if led.comissao else 0)|brl }}</div><div class="s">{{ led.comissao.n if led.comissao else 0 }} comissão(ões)</div></div>
+<div class="kpi"><div class="l">Estornos em saldo</div><div class="v">{{ (led.estorno.v if led.estorno else 0)|brl }}</div><div class="s">{{ led.estorno.n if led.estorno else 0 }} estorno(s)</div></div>
+<div class="kpi"><div class="l">Ajustes manuais</div><div class="v">{{ (led.ajuste.v if led.ajuste else 0)|brl }}</div><div class="s">{{ led.ajuste.n if led.ajuste else 0 }} ajuste(s)</div></div></div>
+
+<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><h2 style="margin:0">Pix recebidos · conferência com o Asaas</h2>
+<a class="btn sm" href="/financeiro?de={{ de }}&ate={{ ate }}&conferir=1">Conferir agora</a></div>
+<table style="margin-top:10px">{% for m in methods %}<tr><td>{{ m.method }} · {{ 'compras' if m.kind == 'buy' else 'recargas' }}</td><td class="r">{{ m.n }}</td><td class="r">{{ (m.v or 0)|brl }}</td></tr>{% endfor %}</table>
+{% if conf %}{% if conf.erro %}<div class="flash err" style="margin-top:10px">{{ conf.erro }}</div>{% else %}
+<p style="margin-top:12px">Asaas: <b>{{ conf.asaas_n }}</b> Pix recebidos · <b>{{ conf.asaas_v|brl }}</b></p>
+{% if not conf.sem_pedido and not conf.nao_pago and not conf.so_aqui %}<div class="flash ok">Tudo confere com o Asaas.</div>{% endif %}
+{% if conf.sem_pedido %}<p class="neg"><b>Recebidos no Asaas sem pedido aqui:</b></p>{% for p in conf.sem_pedido %}<div><code>{{ p.id }}</code> {{ p.value|brl }} {{ p.date }} {{ p.ref }}</div>{% endfor %}{% endif %}
+{% if conf.nao_pago %}<p class="neg"><b>Pagos no Asaas mas não liberados aqui:</b></p>{% for p in conf.nao_pago %}<div><code>{{ p.code }}</code> {{ p.value|brl }} · {{ p.status }}</div>{% endfor %}{% endif %}
+{% if conf.so_aqui %}<p class="neg"><b>Pagos aqui sem registro no Asaas no período:</b></p>{% for p in conf.so_aqui %}<div><code>{{ p.code }}</code> {{ p.amount|brl }}</div>{% endfor %}{% endif %}
+{% endif %}{% endif %}</div>
+
+<div class="card"><h2>Por produto</h2><div class="tw"><table><tr><th>Produto</th><th class="r">Pedidos</th><th class="r">Unid.</th><th class="r">Faturamento</th><th class="r">Custo</th><th class="r">Lucro</th><th class="r">Margem</th></tr>
+{% for p in prods %}<tr><td>{{ p.name }}</td><td class="r">{{ p.n }}</td><td class="r">{{ p.un }}</td>{{ mg(p.fat, p.custo) }}</tr>{% else %}<tr><td colspan="7" class="muted">Sem vendas no período.</td></tr>{% endfor %}</table></div></div>
+<div class="grid g2" style="align-items:start">
+<div class="card"><h2>Por dia</h2><div class="tw"><table><tr><th>Dia</th><th class="r">Vendas</th><th class="r">Fat.</th><th class="r">Custo</th><th class="r">Lucro</th><th class="r">Margem</th></tr>
+{% for d in days %}<tr><td>{{ d.d[8:10] }}/{{ d.d[5:7] }}</td><td class="r">{{ d.n }}</td>{{ mg(d.fat, d.custo) }}</tr>{% else %}<tr><td colspan="6" class="muted">—</td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>Por mês</h2><div class="tw"><table><tr><th>Mês</th><th class="r">Vendas</th><th class="r">Fat.</th><th class="r">Custo</th><th class="r">Lucro</th><th class="r">Margem</th></tr>
+{% for m in months %}<tr><td>{{ m.m[5:7] }}/{{ m.m[0:4] }}</td><td class="r">{{ m.n }}</td>{{ mg(m.fat, m.custo) }}</tr>{% else %}<tr><td colspan="6" class="muted">—</td></tr>{% endfor %}</table></div></div></div>
+{% endblock %}

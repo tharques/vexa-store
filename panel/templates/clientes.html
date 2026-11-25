@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Clientes{% endblock %}{% block h1 %}Clientes{% endblock %}
+{% block body %}
+<form class="card row" method="get"><div><label>Buscar</label><input name="q" value="{{ q }}" placeholder="ID, @usuário ou nome"></div><div style="flex:0"><button class="btn">Buscar</button></div></form>
+<div class="card"><div class="tw"><table><tr><th>Cliente</th><th>ID</th><th class="r">Saldo</th><th class="r">Gasto</th><th class="r">Compras</th><th class="r hide-m">Comissões</th><th class="hide-m">Desde</th></tr>
+{% for c in rows %}<tr><td><a href="/clientes/{{ c.id }}"><b>{{ c.name or '—' }}</b></a>{% if c.username %} <span class="muted">@{{ c.username }}</span>{% endif %}</td>
+<td class="muted">{{ c.id }}</td><td class="r">{{ c.balance|brl }}</td><td class="r">{{ c.spent|brl }}</td><td class="r">{{ c.compras }}</td>
+<td class="r hide-m">{{ (c.ref_earned or 0)|brl }}</td><td class="hide-m muted">{{ c.created_at|dt('%d/%m/%Y') }}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Nenhum cliente.</td></tr>{% endfor %}</table></div></div>
+{% endblock %}

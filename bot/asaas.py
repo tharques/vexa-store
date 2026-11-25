@@ -61,3 +61,21 @@ async def cancel(payment_id: str):
             await _req("DELETE", f"/payments/{payment_id}")
         except Exception:
             pass
+
+
+async def received(start: str, end: str) -> list:
+    """Pix recebidos no período (conferência do painel). Datas YYYY-MM-DD."""
+    if SANDBOX or not ASAAS_API_KEY:
+        return []
+    out = []
+    for st in ("RECEIVED", "CONFIRMED"):
+        offset = 0
+        while True:
+            d = await _req("GET", f"/payments?billingType=PIX&status={st}&paymentDate%5Bge%5D={start}"
+                                  f"&paymentDate%5Ble%5D={end}&limit=100&offset={offset}")
+            out += [{"id": p["id"], "value": p["value"], "date": p.get("paymentDate") or p.get("clientPaymentDate"),
+                     "ref": p.get("externalReference") or ""} for p in d.get("data", [])]
+            if not d.get("hasMore"):
+                break
+            offset += 100
+    return out
