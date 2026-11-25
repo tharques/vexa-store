@@ -31,8 +31,10 @@ jobs:
             if [ ! -d .git ]; then git clone https://x-access-token:$TOKEN@github.com/$REPO .; fi
             git remote set-url origin https://x-access-token:$TOKEN@github.com/$REPO
             git fetch -q origin main && git reset -q --hard origin/main
-            printf '%s\n' "$ENV_FILE" > .env
-            docker compose up -d --build
+            # escapa '$' (docker compose interpola variáveis no env_file; chave Asaas começa com '$')
+            printf '%s\n' "$ENV_FILE" | sed 's/\$\$/$/g; s/\$/$$/g' > .env
+            chmod 600 .env
+            docker compose up -d --build 2>&1 | grep -v 'variable is not set' || true
             docker compose ps
     env:
       HAS_VPS: ${{ secrets.VPS_HOST != '' && (secrets.VPS_PASSWORD != '' || secrets.VPS_SSH_KEY != '') && secrets.ENV_FILE != '' }}
