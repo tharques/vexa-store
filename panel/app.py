@@ -54,6 +54,9 @@ STATUS = {"pending": ("Aguardando pagamento", "gray"), "paid": ("Pago", "blue"),
           "delivered": ("Entregue", "green"), "refunded": ("Estornado", "red"), "expired": ("Expirado", "gray"),
           "canceled": ("Cancelado", "gray"), "failed": ("Falhou", "red")}
 MODES = {"estoque": "Estoque", "api": "API do fornecedor", "webhook": "Webhook", "manual": "Manual"}
+EVENT = {"clique": ("Clique", "gray"), "mensagem": ("Mensagem", "blue"), "pedido": ("Pedido", "blue"),
+         "pagamento": ("Pagamento", "green"), "entrega": ("Entrega", "green"), "erro": ("Erro", "red"),
+         "chamado": ("Chamado", "amber"), "suporte": ("Suporte", "amber")}
 TICKET = {"aberto": ("Aberto", "amber"), "respondido": ("Respondido", "blue"), "resolvido": ("Resolvido", "green")}
 
 
@@ -67,7 +70,7 @@ def local(ts, fmt="%d/%m/%Y %H:%M"):
 
 
 T.env.filters.update(brl=lambda v: brl(v or 0), dt=local, pct=lambda v: f"{(v or 0):.1f}%".replace(".", ","))
-T.env.globals.update(STATUS=STATUS, MODES=MODES, TICKET=TICKET, ROLES=auth.ROLES)
+T.env.globals.update(STATUS=STATUS, MODES=MODES, TICKET=TICKET, ROLES=auth.ROLES, EVENT=EVENT)
 
 
 def R():
@@ -131,6 +134,26 @@ async def form(request, u):
     if not hmac.compare_digest(str(token), u["csrf"]):
         raise Forbidden()
     return f
+
+
+async def client_context(uid, events=80):
+    """Tudo sobre o cliente para dar suporte: dados, pedidos com entregas, histórico no bot e carteira."""
+    c = await R().one("SELECT * FROM users WHERE id=?", uid)
+    orders = [dict(o) for o in await R().q(
+        "SELECT o.*, p.name pname, p.unlimited, p.warranty_days FROM orders o LEFT JOIN products p ON p.id=o.product_id "
+        "WHERE o.user_id=? ORDER BY o.id DESC LIMIT 50", uid)]
+    for o in orders:
+        o["entregas"] = [r["content"] for r in await R().q("SELECT content FROM stock WHERE order_id=? ORDER BY id", o["id"])] or (
+            [o["unlimited"]] * o["qty"] if o["unlimited"] and o["status"] == "delivered" else [])
+        o["warranty_until"] = None
+        if o["delivered_at"] and o["warranty_days"]:
+            o["warranty_until"] = datetime.fromisoformat(o["delivered_at"]) + timedelta(days=o["warranty_days"])
+    ev = await R().q("SELECT * FROM events WHERE user_id=? ORDER BY id DESC LIMIT ?", uid, events)
+    ledger = await R().q("SELECT * FROM ledger WHERE user_id=? ORDER BY id DESC LIMIT 30", uid)
+    tickets = await R().q("SELECT * FROM tickets WHERE user_id=? ORDER BY id DESC", uid)
+    n = sum(1 for o in orders if o["status"] == "delivered" and o["kind"] == "buy")
+    return {"c": c, "orders": orders, "events": ev, "ledger": ledger, "tickets": tickets, "compras": n,
+            "now": datetime.utcnow()}
 
 
 async def audit(request, u, action, entity="", eid="", detail=None):
@@ -608,7 +631,11 @@ async def pedido(request: Request, oid: int):
     items = [r["content"] for r in await R().q("SELECT content FROM stock WHERE order_id=? ORDER BY id", oid)]
     timeline = [("Criado", o["created_at"]), ("Pago", o["paid_at"]), ("Enviado ao fornecedor", o["sent_at"]),
                 ("Entregue", o["delivered_at"])]
-    return await render(request, "pedido.html", u, o=o, items=items, timeline=timeline)
+    # o que o cliente fez desde 30 min antes do pedido até a entrega (+ tudo ligado a este código)
+    events = await R().q("SELECT * FROM events WHERE user_id=? AND (ref=? OR created_at BETWEEN datetime(?, '-30 minutes') "
+                         "AND datetime(COALESCE(?, ?), '+30 minutes')) ORDER BY id DESC LIMIT 80",
+                         o["user_id"], o["code"], o["created_at"], o["delivered_at"], o["created_at"])
+    return await render(request, "pedido.html", u, o=o, items=items, timeline=timeline, events=events)
 
 
 async def get_order(oid):
@@ -639,6 +666,7 @@ async def pedido_entregar(request: Request, oid: int):
     await R().x("UPDATE orders SET supplier_log=COALESCE(supplier_log,'')||? WHERE id=?",
                 f"[{datetime.utcnow():%d/%m %H:%M:%S}] entregue manualmente por {u['username']}\n", oid)
     await audit(request, u, "entregou pedido manualmente", "orders", o["code"], f"{len(items[:o['qty']])} item(ns)")
+    await R().event(o["user_id"], "suporte", f"Entrega manual feita por {u['username']}", o["code"])
     go(back, f"Pedido {o['code']} enviado ao cliente.")
 
 
@@ -668,6 +696,7 @@ async def pedido_estornar(request: Request, oid: int):
         go(f"/pedidos/{oid}", err="O pedido mudou de status; recarregue.")
     await R().credit(o["user_id"], o["amount"], "estorno", o["code"])
     await audit(request, u, "estornou em saldo", "orders", o["code"], {"valor": o["amount"], "motivo": motivo})
+    await R().event(o["user_id"], "suporte", f"Estorno de {brl(o['amount'])} por {u['username']}: {motivo}", o["code"])
     try:
         await tg().send_message(o["user_id"], f"↩️ <b>Estorno do pedido</b> <code>{o['code']}</code>\n"
                                               f"<b>{brl(o['amount'])}</b> foram creditados na sua carteira.\nMotivo: {motivo}",
@@ -712,7 +741,8 @@ async def cliente(request: Request, uid: int):
     orders = await R().q("SELECT o.*, p.name pname FROM orders o LEFT JOIN products p ON p.id=o.product_id "
                          "WHERE o.user_id=? ORDER BY o.id DESC LIMIT 100", uid)
     ledger = await R().q("SELECT * FROM ledger WHERE user_id=? ORDER BY id DESC LIMIT 100", uid)
-    return await render(request, "cliente.html", u, c=c, ref=ref, refs=refs, orders=orders, ledger=ledger)
+    events = await R().q("SELECT * FROM events WHERE user_id=? ORDER BY id DESC LIMIT 200", uid)
+    return await render(request, "cliente.html", u, c=c, ref=ref, refs=refs, orders=orders, ledger=ledger, events=events)
 
 
 @app.post("/clientes/{uid}/saldo")
@@ -727,6 +757,7 @@ async def cliente_saldo(request: Request, uid: int):
         go(f"/clientes/{uid}", err="O saldo não pode ficar negativo.")
     await R().credit(uid, valor, f"ajuste: {motivo[:200]}", u["username"])
     await audit(request, u, "ajustou saldo", "users", uid, {"valor": valor, "antes": c["balance"], "motivo": motivo})
+    await R().event(uid, "suporte", f"Saldo ajustado em {brl(valor)} por {u['username']}: {motivo}")
     go(f"/clientes/{uid}", f"Saldo ajustado em {brl(valor)}.")
 
 
@@ -827,7 +858,7 @@ async def chamado(request: Request, tid: int):
     if not msgs:  # chamado antigo, antes das conversas
         msgs = [{"sender": "cliente", "staff": "", "text": t["text"], "created_at": t["created_at"]}]
     o = await R().one("SELECT id, code, status FROM orders WHERE code=?", t["order_code"])
-    return await render(request, "chamado.html", u, t=t, msgs=msgs, o=o)
+    return await render(request, "chamado.html", u, t=t, msgs=msgs, o=o, cx=await client_context(t["user_id"]))
 
 
 @app.post("/chamados/{tid}/responder")
@@ -847,6 +878,7 @@ async def chamado_responder(request: Request, tid: int):
     novo = "resolvido" if f.get("resolver") else "respondido"
     await R().x("UPDATE tickets SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", novo, tid)
     await audit(request, u, "respondeu chamado", "tickets", tid, text[:200])
+    await R().event(t["user_id"], "suporte", f"Resposta do suporte ({u['username']}) no chamado #{tid}: {text}", t["order_code"])
     go(f"/chamados/{tid}", "Resposta enviada ao cliente.")
 
 
@@ -1032,6 +1064,24 @@ async def usuario_save(request: Request):
         return await render(request, "usuarios.html", u, rows=await R().q("SELECT * FROM panel_users ORDER BY username"),
                             newpw=pw, flash=msg)
     go("/usuarios", msg)
+
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs(request: Request):
+    """Histórico de todos os clientes: cliques, mensagens, pedidos, pagamentos, entregas, erros e suporte."""
+    u = await guard(request)
+    qp = request.query_params
+    where, args = ["1=1"], []
+    if qp.get("tipo"):
+        where.append("e.kind=?"); args.append(qp["tipo"])
+    if qp.get("q"):
+        q = qp["q"].strip().lstrip("@")
+        where.append("(CAST(e.user_id AS TEXT)=? OR e.ref LIKE ? OR e.detail LIKE ? OR us.username LIKE ? OR us.name LIKE ?)")
+        args += [q, f"%{q.upper()}%", f"%{q}%", f"%{q}%", f"%{q}%"]
+    rows = await R().q("SELECT e.*, us.name uname, us.username FROM events e LEFT JOIN users us ON us.id=e.user_id "
+                       f"WHERE {' AND '.join(where)} ORDER BY e.id DESC LIMIT 500", *args)
+    erros24 = (await R().one("SELECT COUNT(*) n FROM events WHERE kind='erro' AND created_at>=datetime('now','-1 day')"))["n"]
+    return await render(request, "logs.html", u, rows=rows, qp=qp, erros24=erros24)
 
 
 @app.get("/auditoria", response_class=HTMLResponse)

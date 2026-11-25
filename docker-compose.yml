@@ -13,7 +13,8 @@ services:
               "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]
     env_file: .env
     volumes: ["./data:/app/data"]
-    expose: ["8000"]
+    # só no localhost da VPS: o Caddy faz o HTTPS na frente
+    ports: ["127.0.0.1:${PANEL_PORT:-18080}:8000"]
     restart: unless-stopped
 
   caddy:  # HTTPS automático (Let's Encrypt); sobe só se 80/443 estiverem livres (ver deploy.yml)

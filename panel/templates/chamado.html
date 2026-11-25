@@ -1,12 +1,35 @@
 {% extends "base.html" %}{% block title %}Chamado #{{ t.id }}{% endblock %}{% block h1 %}Chamado #{{ t.id }}{% endblock %}
 {% block actions %}<a class="btn ghost" href="/chamados">‹ Chamados</a>{% endblock %}
 {% block body %}
-{% set x = TICKET.get(t.status, (t.status,'gray')) %}
-<div class="card"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px"><div><b>{{ t.uname or t.user_id }}</b>{% if t.username %} <span class="muted">@{{ t.username }}</span>{% endif %}
-· pedido {% if o %}<a href="/pedidos/{{ o.id }}">{{ o.code }}</a> {{ st(o.status) }}{% else %}{{ t.order_code }}{% endif %}</div><span class="pill {{ x[1] }}">{{ x[0] }}</span></div></div>
+{% set x = TICKET.get(t.status, (t.status,'gray')) %}{% set c = cx.c %}
+<div class="grid g2" style="align-items:start"><div>
+<div class="card"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px"><div>Pedido {% if o %}<a href="/pedidos/{{ o.id }}">{{ o.code }}</a> {{ st(o.status) }}{% else %}{{ t.order_code }}{% endif %}
+<div class="small muted">aberto {{ t.created_at|dt }}</div></div><span class="pill {{ x[1] }}">{{ x[0] }}</span></div></div>
 <div class="card">{% for m in msgs %}<div class="msg {{ m.sender }}"><div class="small muted">{{ 'Cliente' if m.sender == 'cliente' else 'Suporte · ' ~ (m.staff or '') }} · {{ m.created_at|dt }}</div>{{ m.text }}</div>{% endfor %}</div>
 <form class="card" method="post" action="/chamados/{{ t.id }}/responder">{{ csrf() }}<h2>Responder</h2>
 <div class="f"><textarea name="text" required placeholder="A resposta chega no Telegram do cliente como “Suporte VEXA”."></textarea></div>
 <div class="row"><div style="flex:0"><button class="btn grad">Enviar</button></div><div style="flex:0"><button class="btn ghost" name="resolver" value="1">Enviar e resolver</button></div></div></form>
 <form class="card row" method="post" action="/chamados/{{ t.id }}/status">{{ csrf() }}<div><label>Status</label><select name="status">{% for k, v in TICKET.items() %}<option value="{{ k }}" {{ 'selected' if t.status == k }}>{{ v[0] }}</option>{% endfor %}</select></div><div style="flex:0"><button class="btn ghost">Atualizar</button></div></form>
+<div class="card"><h2>O que o cliente fez no bot</h2>{{ evlist(cx.events) }}</div>
+</div><div>
+<div class="card"><h2>Cliente</h2>
+{% if c %}<table>
+<tr><td class="muted">Nome</td><td><b>{{ c.name }}</b>{% if c.username %} · <a href="https://t.me/{{ c.username }}" target="_blank" rel="noopener noreferrer">@{{ c.username }}</a>{% endif %}</td></tr>
+<tr><td class="muted">ID Telegram</td><td><code>{{ c.id }}</code>{% if u.role == 'admin' %} · <a href="/clientes/{{ c.id }}">ficha completa</a>{% endif %}</td></tr>
+<tr><td class="muted">Saldo</td><td><b>{{ c.balance|brl }}</b></td></tr>
+<tr><td class="muted">Compras</td><td>{{ cx.compras }} · total gasto {{ c.spent|brl }}</td></tr>
+<tr><td class="muted">Cliente desde</td><td>{{ c.created_at|dt }}</td></tr>
+<tr><td class="muted">Chamados</td><td>{% for tk in cx.tickets %}<a href="/chamados/{{ tk.id }}">#{{ tk.id }}</a> {% endfor %}</td></tr>
+</table>{% else %}<p class="muted">Cliente não encontrado.</p>{% endif %}</div>
+<div class="card"><h2>Pedidos e entregas</h2>
+{% for od in cx.orders %}<div style="border-bottom:1px solid var(--line);padding:8px 0">
+<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><a href="/pedidos/{{ od.id }}"><b>{{ od.code }}</b></a> · {{ od.pname or 'Recarga' }}{% if od.qty > 1 %} ×{{ od.qty }}{% endif %} · {{ od.amount|brl }} · {{ od.method }}</div>{{ st(od.status) }}</div>
+<div class="small muted">criado {{ od.created_at|dt }}{% if od.delivered_at %} · entregue {{ od.delivered_at|dt }}{% endif %}
+{% if od.warranty_until %} · garantia até {{ od.warranty_until|dt('%d/%m/%Y') }} {% if od.warranty_until > cx.now %}<span class="pill green">vigente</span>{% else %}<span class="pill gray">vencida</span>{% endif %}{% endif %}</div>
+{% for i in od.entregas %}<div style="margin-top:4px"><code>{{ i }}</code></div>{% endfor %}
+{% if od.supplier_log %}<details style="margin-top:4px"><summary class="small">log do fornecedor</summary><pre>{{ od.supplier_log }}</pre></details>{% endif %}
+</div>{% else %}<p class="muted">Sem pedidos.</p>{% endfor %}</div>
+<div class="card"><h2>Carteira</h2><div class="tw"><table>{% for l in cx.ledger %}<tr><td class="small muted">{{ l.created_at|dt }}</td><td>{{ l.reason }}{% if l.ref %} <span class="muted small">{{ l.ref }}</span>{% endif %}</td>
+<td class="r {{ 'pos' if l.delta > 0 else 'neg' }}">{{ l.delta|brl }}</td></tr>{% else %}<tr><td class="muted">Sem movimentações.</td></tr>{% endfor %}</table></div></div>
+</div></div>
 {% endblock %}

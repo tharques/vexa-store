@@ -575,6 +575,19 @@ async def painel_e_fornecedores(adm, ana):
           and (await M.repo.one("SELECT status FROM tickets WHERE id=?", t["id"]))["status"] == "aberto")
     r = await H.get(f"/chamados/{t['id']}")
     check("chamado: thread no painel", "Funcionou, valeu!" in r.text and "Chave trocada" in r.text)
+    check("chamado: mostra entregas do cliente (chaves)", "PY-KEY-" in r.text and "garantia até" in r.text)
+    check("chamado: mostra histórico do cliente no bot", "Viu produto Curso Python" in r.text and "Pagamento confirmado" in r.text
+          and "Entregue: Curso Python" in r.text and "Acionou garantia" in r.text)
+    check("chamado: mostra saldo e carteira", "Carteira" in r.text and "comissao" in r.text)
+    ev = [e["detail"] for e in await M.repo.q("SELECT detail FROM events")]
+    check("histórico: CPF nunca é gravado", not any("52998224725" in d or "529.982" in d for d in ev)
+          and any("CPF (oculto)" in d for d in ev))
+    check("histórico: erros do cliente registrados", any("Cupom recusado" in d for d in ev) and any("estornados em saldo" in d for d in ev))
+    check("histórico: ações do suporte registradas", any("Resposta do suporte" in d for d in ev) and any("Estorno de" in d for d in ev))
+    r = await H.get("/logs?tipo=erro")
+    check("logs: filtro de erros", r.status_code == 200 and "Cupom recusado" in r.text)
+    r = await H.get("/logs?q=Kaio")
+    check("logs: busca por cliente", "Gift API" in r.text)
 
     # ── configurações e cupom com validade ──
     await post("/config", store_name="VEXA SHOPPING", support_username="vexasuporte", ref_pct="5", order_timeout_min="30",
@@ -598,13 +611,13 @@ async def painel_e_fornecedores(adm, ana):
              "/fornecedores/novo", "/pedidos", "/pedidos?status=delivered&metodo=saldo&cliente=Kaio", f"/pedidos/{o1['id']}",
              "/fila", "/clientes", "/clientes/120", "/financeiro", "/financeiro?conferir=1", "/financeiro/csv",
              "/financeiro/csv?tipo=extrato", "/chamados", "/chamados?status=aberto", "/cupons", "/avisos", "/config",
-             "/usuarios", "/auditoria", "/senha"]
+             "/usuarios", "/auditoria", "/senha", "/logs"]
     bad = []
     for pth in pages:
         r = await H.get(pth)
         if r.status_code != 200:
             bad.append(f"{pth}={r.status_code}")
-    check("painel: todas as telas abrem (25)", not bad, bad)
+    check("painel: todas as telas abrem (26)", not bad, bad)
     r = await H.get("/financeiro")
     check("financeiro: lucro e margem", "Lucro" in r.text and "Margem" in r.text and "Gift API" in r.text)
 
@@ -622,6 +635,9 @@ async def painel_e_fornecedores(adm, ana):
     check("atendente: bloqueado no resto", all(codes[p] == 403 for p in ("/financeiro", "/clientes", "/config", "/usuarios")), codes)
     r = await H2.post(f"/pedidos/{o1['id']}/estornar", data={"csrf": c2, "motivo": "x"})
     check("atendente: não estorna", r.status_code == 403)
+    r = await H2.get(f"/chamados/{t['id']}")
+    check("atendente: vê contexto completo no chamado", r.status_code == 200 and "PY-KEY-" in r.text and "O que o cliente fez" in r.text)
+    check("atendente: sem acesso a logs gerais", (await H2.get("/logs")).status_code == 403)
     # sessão expirada
     await M.repo.x("UPDATE panel_sessions SET expires_at=datetime('now','-1 minute')")
     r = await H.get("/produtos")

@@ -30,4 +30,5 @@
 <h2>Estornar em saldo</h2><div class="f"><label>Motivo (obrigatório)</label><input name="motivo" required></div>
 <button class="btn red">Estornar {{ o.amount|brl }}</button></form>{% endif %}
 </div></div>
+<div class="card"><h2>O que o cliente fez neste pedido</h2>{{ evlist(events) }}</div>
 {% endblock %}

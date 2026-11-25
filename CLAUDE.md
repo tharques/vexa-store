@@ -28,8 +28,11 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
   SameSite=Lax 12 h, CSRF em todo POST, papéis admin/atendente (**nega por padrão**: rota sem papel = só admin),
   auditoria de toda alteração (tabela `audit`). 1º início cria `thiago` com senha temporária enviada só no Telegram.
   O painel não entrega direto: grava itens + status `ready`/`resend=1` e o bot envia na tela de entrega.
+- Histórico de suporte: tabela `events` (middleware `Activity` no bot grava cliques, mensagens — CPF nunca —,
+  pedidos, pagamentos, entregas, erros; o painel grava ações do suporte). Aparece no chamado (com pedidos, entregas,
+  garantia e carteira do cliente), na ficha do cliente, no pedido e em `/logs` (admin).
 - `bot/asaas.py` (Pix + `received()` para conferência), `bot/binance_pay.py` (USDT), `bot/ui.py` (identidade).
-- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 141 checagens. Roda no CI
+- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 151 checagens. Roda no CI
   antes do deploy; rode sempre após mudar bot ou painel.
 
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)
@@ -53,12 +56,11 @@ não sobe o Caddy (avisa no log) e mantém bot + painel. Secrets: `VPS_HOST`, `V
 ENV_FILE opcional: `PANEL_DOMAIN` (padrão vexa.traxor.pro) e `SUP_<NOME>=chave` para cada fornecedor API.
 A VPS também roda o bot "Gestor" (OpenClaw) — não mexer em nada fora de /opt/vexa.
 
-## Pendências — atualizado 24/11/2026 22h
-Bot **no ar** na VPS (deploy verde, /start, botões e /admin testados no Telegram). Descrição do BotFather já fala em Pix.
-Chave Asaas atual: `vexa-bot-2` (a `vexa-bot` vazou num log público, foi desabilitada). `.env` escapa `$` no deploy.
-1. Cadastrar produtos reais (Thiago informa nome, preço, garantia, descrição e o que é entregue).
-2. Repo **público** temporariamente (Actions sem orçamento). Voltar para **privado** ao terminar —
-   privado sem orçamento/cartão bloqueia o deploy automático.
-3. Thiago trocar a senha root da VPS e atualizar o secret `VPS_PASSWORD` (você não digita senhas).
-4. Binance Pay só com conta **Merchant**; sem chave, botão USDT fica oculto.
-5. Opcional: webhook Asaas, entrega de arquivos (file_id), canal @vexashopping, notificação de chamados por e-mail/painel.
+## Pendências — atualizado 25/11/2026
+Bot + painel no ar na VPS. Painel publicado só em 127.0.0.1:18080 na VPS.
+1. HTTPS do painel: 80/443 da VPS pertencem a um Caddy do host (Gestor). Falta incluir no Caddyfile do host o site
+   `vexa.traxor.pro { reverse_proxy 127.0.0.1:18080 }` e recarregar. Decisão do Thiago sobre como fazer.
+2. Thiago confirmar que recebeu no Telegram a senha temporária do usuário `thiago` do painel.
+3. Cadastrar produtos reais (agora pelo painel). Repo voltar para privado ao terminar.
+4. Trocar a senha root da VPS e atualizar o secret `VPS_PASSWORD`.
+5. Binance Pay só com conta Merchant; sem chave, USDT fica oculto.

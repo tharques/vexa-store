@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Logs{% endblock %}{% block h1 %}Logs de clientes{% endblock %}
+{% block body %}
+<form class="card row" method="get">
+<div><label>Tipo</label><select name="tipo"><option value="">Todos</option>{% for k, v in EVENT.items() %}<option value="{{ k }}" {{ 'selected' if qp.get('tipo') == k }}>{{ v[0] }}</option>{% endfor %}</select></div>
+<div><label>Buscar</label><input name="q" value="{{ qp.get('q','') }}" placeholder="ID, @, nome, pedido VX-… ou texto"></div>
+<div style="flex:0"><button class="btn">Filtrar</button></div>
+<div style="flex:0"><a class="btn ghost" href="/logs?tipo=erro">Só erros {% if erros24 %}<span class="badge">{{ erros24 }} em 24h</span>{% endif %}</a></div></form>
+<div class="card">{{ evlist(rows, True) }}<p class="small muted">Últimos 500 registros. CPF nunca é gravado.</p></div>
+{% endblock %}

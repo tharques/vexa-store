@@ -12,6 +12,11 @@
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ u.csrf if u else "" }}"}'>
 {% macro csrf() %}<input type="hidden" name="csrf" value="{{ u.csrf }}">{% endmacro %}
+{% macro evp(k) %}{% set x = EVENT.get(k, (k, 'gray')) %}<span class="pill {{ x[1] }}">{{ x[0] }}</span>{% endmacro %}
+{% macro evlist(events, show_user=False) %}<div class="tw"><table>{% for e in events %}<tr><td class="small muted" style="white-space:nowrap">{{ e.created_at|dt('%d/%m %H:%M:%S') }}</td>
+<td>{{ evp(e.kind) }}</td>{% if show_user %}<td class="small">{% if e.user_id %}<a href="/clientes/{{ e.user_id }}">{{ e.uname or e.user_id }}</a>{% else %}sistema{% endif %}</td>{% endif %}
+<td style="word-break:break-word">{{ e.detail }}{% if e.ref %} <span class="small muted">{{ e.ref }}</span>{% endif %}</td></tr>
+{% else %}<tr><td class="muted">Sem atividade registrada.</td></tr>{% endfor %}</table></div>{% endmacro %}
 {% macro st(s) %}{% set x = STATUS.get(s, (s, 'gray')) %}<span class="pill {{ x[1] }}">{{ x[0] }}</span>{% endmacro %}
 {% set path = request.url.path %}
 <div class="layout" x-data="{open:false}">
@@ -33,6 +38,7 @@
     <a href="/financeiro" class="{{ 'on' if path.startswith('/financeiro') }}">Financeiro</a>
     <a href="/config" class="{{ 'on' if path.startswith('/config') }}">Configurações</a>
     <a href="/usuarios" class="{{ 'on' if path.startswith('/usuarios') }}">Usuários</a>
+    <a href="/logs" class="{{ 'on' if path.startswith('/logs') }}">Logs de clientes</a>
     <a href="/auditoria" class="{{ 'on' if path.startswith('/auditoria') }}">Auditoria</a>
     {% endif %}
     <div class="sec">{{ u.username }} · {{ ROLES[u.role] }}</div>

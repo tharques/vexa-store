@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS panel_users(
 CREATE TABLE IF NOT EXISTS panel_sessions(
   token_hash TEXT PRIMARY KEY, user_id INTEGER, csrf TEXT, ip TEXT, expires_at TEXT);
 CREATE TABLE IF NOT EXISTS login_fail(key TEXT PRIMARY KEY, count INTEGER DEFAULT 0, locked_until TEXT);
+CREATE TABLE IF NOT EXISTS events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, kind TEXT, detail TEXT, ref TEXT DEFAULT '',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, who TEXT, action TEXT, entity TEXT, entity_id TEXT, detail TEXT, ip TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -71,6 +74,7 @@ MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS ix_stock_order ON stock(order_id)",
     "CREATE INDEX IF NOT EXISTS ix_stock_prod ON stock(product_id, sold)",
     "CREATE INDEX IF NOT EXISTS ix_ledger_user ON ledger(user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_events_user ON events(user_id, id)",
 ]
 
 
@@ -126,6 +130,13 @@ class Repo:
             return False
         await self.x("INSERT INTO ledger(user_id,delta,reason,ref) VALUES(?,?,?,?)", uid, -amount, reason, ref)
         return True
+
+    async def event(self, uid, kind, detail, ref=""):
+        """Histórico de atividade (suporte): cliques, mensagens, pedidos, pagamentos, entregas e erros."""
+        try:
+            await self.x("INSERT INTO events(user_id,kind,detail,ref) VALUES(?,?,?,?)", uid, kind, str(detail)[:500], ref or "")
+        except Exception:
+            pass
 
     async def setting(self, key, default=None):
         r = await self.one("SELECT value FROM settings WHERE key=?", key)

@@ -22,4 +22,5 @@
 <div class="card"><h2>Extrato da carteira</h2><div class="tw"><table>{% for l in ledger %}<tr><td class="small muted">{{ l.created_at|dt }}</td><td>{{ l.reason }}{% if l.ref %} <span class="muted small">{{ l.ref }}</span>{% endif %}</td>
 <td class="r {{ 'pos' if l.delta > 0 else 'neg' }}">{{ l.delta|brl }}</td></tr>{% else %}<tr><td class="muted">Sem movimentações registradas.</td></tr>{% endfor %}</table></div></div>
 </div></div>
+<div class="card"><h2>Histórico no bot</h2>{{ evlist(events) }}</div>
 {% endblock %}
