@@ -6,7 +6,7 @@ import sys
 import tempfile
 from datetime import datetime
 
-os.environ.update(BOT_TOKEN="123:abc", SANDBOX="1", ADMIN_IDS="1323196351", CHANNEL_ID="@canal",
+os.environ.update(BOT_TOKEN="123456:TESTE_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SANDBOX="1", ADMIN_IDS="1323196351", CHANNEL_ID="@canal",
                   DB_PATH=os.path.join(tempfile.mkdtemp(), "t.db"), SUPPORT_USERNAME="vexasuporte")
 
 from aiogram import Bot, Dispatcher
