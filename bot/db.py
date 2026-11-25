@@ -26,7 +26,34 @@ CREATE TABLE IF NOT EXISTS tickets(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, order_code TEXT, text TEXT,
   status TEXT DEFAULT 'open', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS media(key TEXT PRIMARY KEY, file_id TEXT);
+CREATE TABLE IF NOT EXISTS suppliers(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, kind TEXT DEFAULT 'telegram', config TEXT DEFAULT '{}',
+  link TEXT DEFAULT '', notes TEXT DEFAULT '', active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS ledger(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, delta REAL, reason TEXT, ref TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS expenses(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT, amount REAL, category TEXT DEFAULT '',
+  day TEXT DEFAULT (date('now')));
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 """
+
+MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN ref_earned REAL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN notes TEXT DEFAULT ''",
+    "ALTER TABLE products ADD COLUMN cost REAL DEFAULT 0",
+    "ALTER TABLE products ADD COLUMN supplier_id INTEGER",
+    "ALTER TABLE products ADD COLUMN supplier_ref TEXT DEFAULT ''",
+    "ALTER TABLE products ADD COLUMN ref_link TEXT DEFAULT ''",
+    "ALTER TABLE products ADD COLUMN notes TEXT DEFAULT ''",
+    "ALTER TABLE products ADD COLUMN sort INTEGER DEFAULT 0",
+    "ALTER TABLE categories ADD COLUMN active INTEGER DEFAULT 1",
+    "ALTER TABLE orders ADD COLUMN cost REAL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN supplier_log TEXT DEFAULT ''",
+    "ALTER TABLE tickets ADD COLUMN reply TEXT DEFAULT ''",
+]
 
 
 async def connect():
@@ -34,10 +61,11 @@ async def connect():
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     await db.executescript(SCHEMA)
-    try:
-        await db.execute("ALTER TABLE users ADD COLUMN ref_earned REAL DEFAULT 0")
-    except Exception:
-        pass
+    for sql in MIGRATIONS:
+        try:
+            await db.execute(sql)
+        except Exception:
+            pass  # coluna já existe
     await db.commit()
     return db
 
@@ -64,10 +92,31 @@ class Repo:
         await self.db.commit()
         return cur.rowcount
 
+    async def credit(self, uid, delta, reason, ref=""):
+        """Movimenta saldo e registra no extrato (ledger)."""
+        delta = round(float(delta), 2)
+        await self.db.execute("UPDATE users SET balance=round(balance+?,2) WHERE id=?", (delta, uid))
+        await self.x("INSERT INTO ledger(user_id,delta,reason,ref) VALUES(?,?,?,?)", uid, delta, reason, ref)
+
+    async def debit(self, uid, amount, reason, ref=""):
+        """Débito atômico: só debita se houver saldo. Devolve True/False."""
+        amount = round(float(amount), 2)
+        if not await self.run("UPDATE users SET balance=round(balance-?,2) WHERE id=? AND balance>=?", amount, uid, amount):
+            return False
+        await self.x("INSERT INTO ledger(user_id,delta,reason,ref) VALUES(?,?,?,?)", uid, -amount, reason, ref)
+        return True
+
+    async def setting(self, key, default=None):
+        r = await self.one("SELECT value FROM settings WHERE key=?", key)
+        return r["value"] if r else default
+
+    async def set_setting(self, key, value):
+        await self.x("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", key, value)
+
     async def stock(self, pid):
-        p = await self.one("SELECT unlimited FROM products WHERE id=?", pid)
-        if p and p["unlimited"]:
-            return None
+        p = await self.one("SELECT unlimited, supplier_id FROM products WHERE id=?", pid)
+        if p and (p["unlimited"] or p["supplier_id"]):
+            return None  # ilimitado ou comprado no fornecedor na hora
         return (await self.one("SELECT COUNT(*) c FROM stock WHERE product_id=? AND sold=0", pid))["c"]
 
     async def take_stock(self, pid, qty, order_id):
