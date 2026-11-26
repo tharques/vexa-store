@@ -78,7 +78,7 @@ jobs:
             echo "---- aguardando 20s e conferindo bot, painel e HTTPS ----"
             sleep 20
             docker compose --profile https ps -a
-            echo "modo: SANDBOX=$(grep -E '^SANDBOX=' .env | cut -d= -f2 | tr -d ' "$' || echo '?') (1 = pagamentos simulados; produção deve ser 0)"
+            if grep -qE '^SANDBOX=["$]*1' .env; then echo "MODO: SANDBOX LIGADO - pagamentos simulados, NAO venda assim"; else echo "MODO: producao (sandbox desligado)"; fi
             # log público (repo público): só o bot, sem o painel (acessos), com IPs e segredos mascarados
             docker compose logs --tail 25 vexa 2>&1 | sed -E 's/[0-9]{8,}:[A-Za-z0-9_-]{30,}/***TOKEN***/g; s/\$?aact_[A-Za-z0-9_=:$-]+/***ASAAS***/g; s/(Senha|senha|password)[^ ]*[:=] *[^ ]+/\1 ***/g; s/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g'
             docker compose logs --tail 200 painel 2>&1 | grep -cE "Traceback|ERROR" | sed 's/^/erros recentes no painel: /' || true
