@@ -8,6 +8,9 @@ Config (JSON salvo pelo painel em suppliers.config):
 """
 import asyncio
 import hashlib
+import ipaddress
+import socket
+from urllib.parse import urlparse
 import hmac
 import json
 import os
@@ -21,6 +24,26 @@ UA = "vexa-store/1.0"
 
 class SupplierError(Exception):
     pass
+
+
+ALLOW_PRIVATE = os.environ.get("SUP_ALLOW_PRIVATE") == "1"  # só para testes locais
+
+
+def public_url(url):
+    """Bloqueia SSRF: só http(s) para host que resolve em IP público."""
+    try:
+        u = urlparse(url or "")
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return False
+        if ALLOW_PRIVATE:
+            return True
+        for info in socket.getaddrinfo(u.hostname, u.port or (443 if u.scheme == "https" else 80)):
+            ip = ipaddress.ip_address(info[4][0])
+            if not ip.is_global:
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def conf(sup):
@@ -97,8 +120,8 @@ async def call_api(sup, sku, qty, code, log):
     c = conf(sup)
     ctx = {"sku": sku, "qtd": qty, "pedido": code}
     url = fill(c.get("url"), ctx)
-    if not url.startswith(("http://", "https://")):
-        raise SupplierError("URL do fornecedor inválida")
+    if not public_url(url):
+        raise SupplierError("URL do fornecedor inválida ou interna")
     method = (c.get("method") or "POST").upper()
     headers = {k: fill(str(v), ctx) for k, v in (c.get("headers") or {}).items()}
     headers.setdefault("Idempotency-Key", code)
@@ -112,7 +135,7 @@ async def call_api(sup, sku, qty, code, log):
     for attempt in range(1, 4):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.request(method, url, data=data, headers=headers) as r:
+                async with s.request(method, url, data=data, headers=headers, allow_redirects=False) as r:
                     text = await r.text()
                     log(f"tentativa {attempt}: HTTP {r.status} · {redact(text, c)[:500]}")
                     if r.status < 400:
@@ -151,7 +174,7 @@ async def call_webhook(sup, payload, log):
     """Envia o pedido para a URL do fornecedor (assinado). A entrega volta em /webhook/{id} do painel."""
     c = conf(sup)
     url = c.get("url") or ""
-    if not url.startswith(("http://", "https://")) or not c.get("secret"):
+    if not public_url(url) or not c.get("secret"):
         raise SupplierError("webhook sem URL ou segredo")
     body = json.dumps(payload, ensure_ascii=False).encode()
     headers = {"Content-Type": "application/json", "X-Vexa-Signature": sign(c["secret"], body),
@@ -161,7 +184,7 @@ async def call_webhook(sup, payload, log):
     for attempt in range(1, 4):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.post(url, data=body, headers=headers) as r:
+                async with s.post(url, data=body, headers=headers, allow_redirects=False) as r:
                     text = await r.text()
                     log(f"webhook tentativa {attempt}: HTTP {r.status} · {redact(text, c)[:300]}")
                     if r.status < 300:
@@ -181,8 +204,8 @@ async def test(sup):
     if sup["kind"] == "manual":
         return True, "Fornecedor manual: nada a testar."
     url = fill(c.get("url"), {"sku": "TESTE", "qtd": 1, "pedido": "TESTE"})
-    if not url.startswith(("http://", "https://")):
-        return False, "URL inválida."
+    if not public_url(url):
+        return False, "URL inválida ou interna (bloqueada)."
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
             async with s.request("HEAD" if sup["kind"] == "webhook" else "GET", url,

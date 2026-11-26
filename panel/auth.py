@@ -53,6 +53,12 @@ def _h(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# limite por chave: IP e usuário+IP bloqueiam em 5 erros; o usuário sozinho só em 20 (evita que um atacante
+# bloqueie o dono de propósito com poucas tentativas, mas segura ataque distribuído de muitos IPs)
+LIMITS = {"ip": MAX_FAILS, "uip": MAX_FAILS, "u": 20}
+DUMMY_HASH = bcrypt.hashpw(b"vexa-dummy", bcrypt.gensalt(12)).decode()
+
+
 async def locked(repo, *keys):
     for k in keys:
         r = await repo.one("SELECT locked_until FROM login_fail WHERE key=?", k)
@@ -62,12 +68,22 @@ async def locked(repo, *keys):
 
 
 async def fail(repo, *keys):
+    """Conta erros numa janela de 15 min. Devolve as chaves que acabaram de bloquear."""
+    now, newly = _now(), []
+    window_start = _iso(now - timedelta(minutes=LOCK_MIN))
     for k in keys:
-        await repo.x("INSERT INTO login_fail(key,count) VALUES(?,1) ON CONFLICT(key) DO UPDATE SET count=count+1", k)
-        r = await repo.one("SELECT count FROM login_fail WHERE key=?", k)
-        if r["count"] >= MAX_FAILS:
-            await repo.x("UPDATE login_fail SET count=0, locked_until=? WHERE key=?",
-                         _iso(_now() + timedelta(minutes=LOCK_MIN)), k)
+        r = await repo.one("SELECT count, first_at FROM login_fail WHERE key=?", k)
+        if not r or not r["first_at"] or r["first_at"] < window_start:  # janela nova
+            await repo.x("INSERT OR REPLACE INTO login_fail(key,count,locked_until,first_at) VALUES(?,1,NULL,?)", k, _iso(now))
+            cnt = 1
+        else:
+            cnt = r["count"] + 1
+            await repo.x("UPDATE login_fail SET count=? WHERE key=?", cnt, k)
+        if cnt >= LIMITS.get(k.split(":", 1)[0], MAX_FAILS):
+            await repo.x("UPDATE login_fail SET count=0, first_at=NULL, locked_until=? WHERE key=?",
+                         _iso(now + timedelta(minutes=LOCK_MIN)), k)
+            newly.append(k)
+    return newly
 
 
 async def clear_fails(repo, *keys):

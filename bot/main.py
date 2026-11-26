@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import json
 import logging
 import time
@@ -17,7 +18,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BufferedInputFile, CallbackQuery, FSInputFile, InputMediaPhoto, Message)
 
 from . import asaas, binance_pay as bp, fornecedores as forn, store
-from .config import ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, POLL_SECONDS
+from .config import ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, POLL_SECONDS, SANDBOX
 from .db import Repo, connect
 from .store import cfg, num, on
 from .ui import LINE, b, back, brl, header, home_kb, kb, stock_badge, usd
@@ -28,7 +29,8 @@ repo: Repo
 bot: Bot
 BANNERS = Path(__file__).resolve().parent.parent / "assets" / "banners"
 PAGE = 6
-PIX_MIN = 5.0  # mínimo de cobrança do Asaas
+PIX_MIN = 5.0
+TOPUP_VALUES = [20, 50, 100, 200]  # mínimo de cobrança do Asaas
 
 
 class S(StatesGroup):
@@ -39,6 +41,27 @@ class S(StatesGroup):
 
 
 def is_admin(uid): return uid in ADMIN_IDS
+
+
+def esc(v):
+    """Escapa texto vindo do cliente/fornecedor antes de pôr numa mensagem HTML do Telegram."""
+    return html.escape(str(v if v is not None else ""), quote=False)
+
+
+def ints(data, n):
+    """Lê n inteiros de um callback 'x:1:2'. callback_data pode ser forjado: inválido → None."""
+    parts = data.split(":")[1:]
+    if len(parts) < n:
+        return None
+    try:
+        return [int(x) for x in parts[:n]]
+    except ValueError:
+        return None
+
+
+async def sellable(pid):
+    """Produto existe, está ativo e a categoria existe."""
+    return await repo.one("SELECT p.* FROM products p JOIN categories c ON c.id=p.category_id WHERE p.id=? AND p.active=1", pid)
 
 
 # ───────────────────────── histórico de atividade (para o suporte) ─────────────────────────
@@ -133,7 +156,7 @@ async def user(u):
 
 # ───────────────────────── início ─────────────────────────
 async def home_caption(u):
-    first = (u["name"] or "").split(" ")[0] or "cliente"
+    first = esc((u["name"] or "").split(" ")[0] or "cliente")
     refs = (await repo.one("SELECT COUNT(*) n FROM users WHERE ref_by=?", u["id"]))["n"]
     extra = f"\nIndicações  <b>{refs}</b>  ·  ganhos <b>{brl(u['ref_earned'])}</b>" if refs else ""
     return (f"<b>Olá, {first}</b>\n\n"
@@ -181,9 +204,11 @@ async def product_rows(prods):
 
 @router.callback_query(F.data.startswith("c:"))
 async def category(cb: CallbackQuery):
-    _, cid, pg = cb.data.split(":")
-    cid, pg = int(cid), int(pg)
-    c = await repo.one("SELECT * FROM categories WHERE id=?", cid)
+    v = ints(cb.data, 2)
+    c = await repo.one("SELECT * FROM categories WHERE id=?", v[0]) if v else None
+    if not c:
+        return await cb.answer()
+    cid, pg = v[0], max(0, v[1])
     total = (await repo.one("SELECT COUNT(*) n FROM products WHERE category_id=? AND active=1", cid))["n"]
     prods = await repo.q("SELECT * FROM products WHERE category_id=? AND active=1 ORDER BY sort, sold DESC, name "
                          "LIMIT ? OFFSET ?", cid, PAGE, pg * PAGE)
@@ -206,8 +231,11 @@ async def noop(cb: CallbackQuery): await cb.answer()
 
 @router.callback_query(F.data.startswith("p:"))
 async def product(cb: CallbackQuery):
-    _, pid, qty = cb.data.split(":")
-    p = await repo.one("SELECT * FROM products WHERE id=?", int(pid))
+    v = ints(cb.data, 2)
+    p = await sellable(v[0]) if v else None
+    if not p:
+        return await cb.answer("Produto indisponível.", show_alert=True)
+    pid, qty = p["id"], v[1]
     st = await repo.stock(p["id"])
     cap_qty = p["max_qty"] if st is None else min(p["max_qty"], st)
     qty = max(1, min(int(qty), max(cap_qty, 1)))
@@ -232,8 +260,11 @@ async def product(cb: CallbackQuery):
 # ───────────────────────── checkout ─────────────────────────
 async def checkout_view(target, state: FSMContext):
     d = await state.get_data()
-    p = await repo.one("SELECT * FROM products WHERE id=?", d["pid"])
+    p = await sellable(d["pid"])
     u = await repo.one("SELECT * FROM users WHERE id=?", d["uid"])
+    if not p or not 1 <= d["qty"] <= p["max_qty"]:
+        await state.clear()
+        return await screen(target, "checkout", header("Produto indisponível"), kb(back("cat")))
     sub = p["price"] * d["qty"]
     disc = round(sub * d.get("pct", 0) / 100, 2)
     total = round(sub - disc, 2)
@@ -256,10 +287,18 @@ async def checkout_view(target, state: FSMContext):
 
 @router.callback_query(F.data.startswith("buy:"))
 async def buy(cb: CallbackQuery, state: FSMContext):
-    _, pid, qty = cb.data.split(":")
-    if await repo.stock(int(pid)) == 0:
+    v = ints(cb.data, 2)
+    p = await sellable(v[0]) if v else None
+    if not p:
+        return await cb.answer("Produto indisponível.", show_alert=True)
+    st = await repo.stock(p["id"])
+    if st == 0:
         return await cb.answer("Esgotou agora há pouco 😕", show_alert=True)
-    await state.set_data({"kind": "buy", "pid": int(pid), "qty": int(qty), "uid": cb.from_user.id})
+    cap = p["max_qty"] if st is None else min(p["max_qty"], st)
+    qty = v[1]
+    if not 1 <= qty <= max(cap, 1):  # quantidade forjada (negativa, zero ou acima do máximo)
+        return await cb.answer("Quantidade inválida.", show_alert=True)
+    await state.set_data({"kind": "buy", "pid": p["id"], "qty": qty, "uid": cb.from_user.id})
     await checkout_view(cb, state)
 
 
@@ -524,7 +563,7 @@ async def refund_fail(o, p, reason):
     await repo.event(o["user_id"], "erro", f"Entrega falhou ({reason}); {brl(o['amount'])} estornados em saldo", o["code"])
     await show_done(o, f"{header('Não foi possível entregar', o['code'])}\nO fornecedor não confirmou o seu pedido.\n"
                        f"<b>{brl(o['amount'])}</b> voltaram para a sua carteira. Use em qualquer compra.", done_kb(o))
-    await notify_admins(f"⚠️ Fornecedor falhou · {o['code']} · {p['name']} ×{o['qty']}\n{reason}\n"
+    await notify_admins(f"⚠️ Fornecedor falhou · {o['code']} · {p['name']} ×{o['qty']}\n{esc(reason)}\n"
                         f"Estornado {brl(o['amount'])} em saldo.")
 
 
@@ -638,7 +677,7 @@ async def finish(oid, items=None):
 
 
 async def send_delivery(o, p, items, new=False):
-    body = "\n".join(f"<code>{i}</code>" for i in items)
+    body = "\n".join(f"<code>{esc(i)}</code>" for i in items)
     until = (datetime.now() + timedelta(days=p["warranty_days"] or 0)).strftime("%d/%m/%Y")
     cap = (f"✅ <b>Pagamento aprovado</b>\nPedido <code>{o['code']}</code>\n\n"
            f"<b>{p['name']}</b>  ·  {o['qty']} un.\n{LINE}\n"
@@ -698,14 +737,17 @@ async def me(cb: CallbackQuery):
 
 @router.callback_query(F.data == "topup")
 async def topup(cb: CallbackQuery):
-    vals = [20, 50, 100, 200]
+    vals = TOPUP_VALUES
     await screen(cb, "profile", header("Recarregar saldo", "Use depois em qualquer compra, na hora"),
                  kb([b(brl(v), f"tp:{v}") for v in vals[:2]], [b(brl(v), f"tp:{v}") for v in vals[2:]], back("me")))
 
 
 @router.callback_query(F.data.startswith("tp:"))
 async def topup_go(cb: CallbackQuery, state: FSMContext):
-    v = float(cb.data[3:])
+    v = ints(cb.data, 1)
+    if not v or v[0] not in TOPUP_VALUES:  # valor forjado
+        return await cb.answer("Valor inválido.", show_alert=True)
+    v = float(v[0])
     await state.set_data({"kind": "topup", "uid": cb.from_user.id, "total": v, "usdt": await bp.brl_to_usdt(v)})
     d = await state.get_data()
     await screen(cb, "checkout", f"{header('Recarga')}\n<b>{brl(v)}</b>  ≈ {usd(d['usdt'])}\n\nComo quer pagar?",
@@ -733,16 +775,18 @@ async def order_detail(cb: CallbackQuery):
     code = cb.data[3:]
     o = await repo.one("SELECT o.*, p.name, p.unlimited FROM orders o LEFT JOIN products p ON p.id=o.product_id "
                        "WHERE code=? AND user_id=?", code, cb.from_user.id)
+    if not o:
+        return await cb.answer("Pedido não encontrado.", show_alert=True)
     items = [i["content"] for i in await order_items(code, cb.from_user.id)] or ([o["unlimited"]] if o["unlimited"] else [])
     cap = (f"{header(o['name'] or 'Recarga', code)}\n{brl(o['amount'])} · {o['method']} · {o['created_at'][:16]}\n\n" +
-           "\n".join(f"<code>{i}</code>" for i in items))
+           "\n".join(f"<code>{esc(i)}</code>" for i in items))
     await screen(cb, "done", cap[:1024], kb([b("🛡 Acionar garantia", f"tk:{code}")], back("orders")))
 
 
 @router.message(Command("pedido"))
 async def resend(m: Message, command: CommandObject):
     items = await order_items((command.args or "").strip().upper(), m.from_user.id)
-    await m.answer("\n".join(f"<code>{i['content']}</code>" for i in items) or "Pedido não encontrado.")
+    await m.answer("\n".join(f"<code>{esc(i['content'])}</code>" for i in items) or "Pedido não encontrado.")
 
 
 @router.callback_query(F.data == "ref")
@@ -770,6 +814,8 @@ async def support(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("tk:"))
 async def ticket_start(cb: CallbackQuery, state: FSMContext):
+    if not await repo.one("SELECT 1 FROM orders WHERE code=? AND user_id=?", cb.data[3:], cb.from_user.id):
+        return await cb.answer("Pedido não encontrado.", show_alert=True)
     await state.set_state(S.ticket)
     await state.update_data(code=cb.data[3:])
     await cb.answer("Descreva o problema numa mensagem ✍️", show_alert=True)
@@ -784,10 +830,10 @@ async def ticket_text(m: Message, state: FSMContext):
     tid = await repo.x("INSERT INTO tickets(user_id,order_code,text,status,updated_at) VALUES(?,?,?,'aberto',CURRENT_TIMESTAMP)",
                        m.from_user.id, d["code"], text)
     await repo.x("INSERT INTO ticket_messages(ticket_id,sender,text) VALUES(?,?,?)", tid, "cliente", text)
-    await m.answer(f"✅ Chamado <b>#{tid}</b> aberto para o pedido {d['code']}. Respondemos por aqui.",
+    await m.answer(f"✅ Chamado <b>#{tid}</b> aberto para o pedido {esc(d['code'])}. Respondemos por aqui.",
                    reply_markup=kb([b("‹ Início", "home")]))
-    await notify_admins(f"🎫 Chamado novo #{tid} · {d['code']} · {m.from_user.full_name} (<code>{m.from_user.id}</code>)\n"
-                        f"{text}\n\nResponda pelo painel.")
+    await notify_admins(f"🎫 Chamado novo #{tid} · {esc(d['code'])} · {esc(m.from_user.full_name)} (<code>{m.from_user.id}</code>)\n"
+                        f"{esc(text)}\n\nResponda pelo painel.")
 
 
 @router.callback_query(F.data.startswith("tr:"))
@@ -808,7 +854,7 @@ async def ticket_reply_text(m: Message, state: FSMContext):
     await repo.x("INSERT INTO ticket_messages(ticket_id,sender,text) VALUES(?,?,?)", tid, "cliente", text)
     await repo.x("UPDATE tickets SET status='aberto', updated_at=CURRENT_TIMESTAMP WHERE id=?", tid)
     await m.answer(f"✅ Resposta adicionada ao chamado <b>#{tid}</b>.", reply_markup=kb([b("‹ Início", "home")]))
-    await notify_admins(f"🎫 Resposta no chamado #{tid} · {m.from_user.full_name}\n{text}")
+    await notify_admins(f"🎫 Resposta no chamado #{tid} · {esc(m.from_user.full_name)}\n{esc(text)}")
 
 
 # ───────────────────────── admin ─────────────────────────
@@ -984,6 +1030,14 @@ async def main():
     # pedidos interrompidos por queda no meio da entrega voltam para a fila (entrega é idempotente)
     await repo.x("UPDATE orders SET status='paid' WHERE status='delivering'")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    if SANDBOX:
+        logging.warning("SANDBOX=1: pagamentos simulados")
+        for a in ADMIN_IDS:
+            try:
+                await bot.send_message(a, "⚠️ <b>Bot em modo SANDBOX</b>: pagamentos são simulados e qualquer pedido é "
+                                          "aprovado sem pagar. Para vender de verdade, SANDBOX=0 no ENV_FILE.")
+            except Exception:
+                pass
     dp = Dispatcher()
     dp.include_router(router)
     asyncio.create_task(poller())

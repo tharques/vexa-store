@@ -7,7 +7,8 @@ import tempfile
 from datetime import datetime
 
 os.environ.update(BOT_TOKEN="123456:TESTE_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SANDBOX="1", ADMIN_IDS="1323196351", CHANNEL_ID="@canal",
-                  DB_PATH=os.path.join(tempfile.mkdtemp(), "t.db"), SUPPORT_USERNAME="vexasuporte")
+                  DB_PATH=os.path.join(tempfile.mkdtemp(), "t.db"), SUPPORT_USERNAME="vexasuporte",
+                  SUP_ALLOW_PRIVATE="1")
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -605,6 +606,61 @@ async def painel_e_fornecedores(adm, ana):
     r = await post("/avisos/previa", text="Novidade!", filtro="produto", produto=str(p_api["id"]))
     check("avisos: prévia conta só quem comprou o produto", "<b>1</b> cliente(s)" in r.text, _re.findall(r"<b>\d+</b> cliente", r.text))
 
+
+    # ── Segurança: callback_data forjado por cliente malicioso ──
+    mal = U(130, "Malicioso")
+    await mal.send("/start")
+    await M.repo.credit(130, 50, "ajuste: teste")
+    b0 = await bal(130)
+    await mal.click("x", data=f"buy:{p_est['id']}:-5")
+    await mal.click("Saldo") if mal.has("Saldo") else None
+    check("segurança: quantidade negativa não gera saldo", await bal(130) <= b0, (await bal(130), b0))
+    await mal.click("x", data=f"buy:{p_est['id']}:999")
+    d = await M.repo.one("SELECT COUNT(*) n FROM orders WHERE user_id=130 AND qty>5")
+    check("segurança: quantidade acima do máximo é limitada", d["n"] == 0 and ("×999" not in mal.text), mal.text[:120])
+    await M.repo.x("UPDATE products SET active=0 WHERE id=?", p_api["id"])
+    await mal.click("x", data=f"buy:{p_api['id']}:1")
+    check("segurança: produto inativo não abre checkout", "Resumo do pedido" not in mal.text or "Gift API" not in mal.text, mal.text[:80])
+    await mal.click("x", data=f"p:{p_api['id']}:1")
+    check("segurança: produto inativo não abre card", not mal.has("Comprar"))
+    await M.repo.x("UPDATE products SET active=1 WHERE id=?", p_api["id"])
+    await mal.click("x", data="tp:0.01")
+    check("segurança: recarga com valor forjado recusada", "0,01" not in mal.text)
+    await mal.click("x", data="p:abc:1"); await mal.click("x", data="buy:1"); await mal.click("x", data="od:VX-NAO-EXISTE")
+    check("segurança: callback inválido não quebra o bot", True)
+    # HTML injetado por cliente não quebra mensagem do admin
+    n_adm = len(tg.chats[ADMIN])
+    await mal.click("x", data="tk:VX-DE-OUTRO")
+    check("segurança: garantia de pedido alheio recusada", "não encontrado" in (mal.alert or ""))
+    await mal.click("x", data=f"buy:{p_est['id']}:1"); await mal.click("Saldo")
+    mcode = (await M.repo.one("SELECT code FROM orders WHERE user_id=130 ORDER BY id DESC"))["code"]
+    await mal.click("x", data=f"tk:{mcode}"); await mal.send("<b>quebra <a href='http://phish'>clique</a>")
+    t_last = next((m["text"] for m in tg.chats[ADMIN][n_adm:] if "Chamado novo" in m["text"]), "")
+    check("segurança: HTML do cliente é escapado para o admin", "&lt;b&gt;" in t_last and "<a href" not in t_last, t_last[:160])
+
+
+    # ── Segurança do painel ──
+    r = await H.get("/login")
+    hd = {k.lower(): v for k, v in r.headers.items()}
+    check("painel: cabeçalhos de segurança (HSTS, CSP, frame)", "max-age" in hd.get("strict-transport-security", "")
+          and "frame-ancestors 'none'" in hd.get("content-security-policy", "") and hd.get("x-frame-options") == "DENY")
+    check("painel: nenhum script de CDN externo", "unpkg.com" not in (await H.get("/")).text and "jsdelivr" not in (await H.get("/")).text)
+    H3 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("192.0.2.50", 5000)),
+                           base_url="https://painel.test", follow_redirects=False)
+    for i in range(5):
+        await H3.post("/login", data={"username": f"x{i}", "password": "y"})
+    # o atacante manda X-Forwarded-For falso; o Caddy acrescenta o IP real no fim
+    r = await H3.post("/login", data={"username": "z", "password": "y"}, headers={"X-Forwarded-For": "6.6.6.6, 192.0.2.50"})
+    check("painel: X-Forwarded-For forjado não burla bloqueio por IP", "Aguarde 15 minutos" in r.text)
+    check("painel: bloqueio avisa no Telegram", any("bloqueio por tentativas" in m["text"] for m in tg.chats[ADMIN]))
+    await H3.aclose()
+    forn.ALLOW_PRIVATE = False
+    r = await post("/fornecedores/salvar", name="Interno", kind="api", url="http://127.0.0.1:2019/load", headers="{}")
+    check("painel: bloqueia URL interna de fornecedor (SSRF)", "err=" in r.headers.get("location", ""))
+    r = await post("/fornecedores/salvar", name="Interno2", kind="webhook", url="http://169.254.169.254/latest", headers="{}")
+    check("painel: bloqueia IP de metadados (SSRF)", "err=" in r.headers.get("location", ""))
+    forn.ALLOW_PRIVATE = True
+
     # ── todas as telas abrem ──
     o1 = await M.repo.one("SELECT id FROM orders ORDER BY id DESC")
     pages = ["/", "/produtos", f"/produtos/{p_api['id']}", "/produtos/novo", "/fornecedores", f"/fornecedores/{sups['Hook']['id']}",
@@ -630,6 +686,14 @@ async def painel_e_fornecedores(adm, ana):
     await H2.post("/login", data={"username": "ana.suporte", "password": _html.unescape(pw2.group(1))})
     c2 = csrf_of((await H2.get("/senha")).text)
     await H2.post("/senha", data={"csrf": c2, "current": _html.unescape(pw2.group(1)), "new": "Atende1234X", "repeat": "Atende1234X"})
+    H4 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("198.51.100.8", 5000)),
+                           base_url="https://painel.test", follow_redirects=False)
+    await H4.post("/login", data={"username": "ana.suporte", "password": "Atende1234X"})
+    c4 = csrf_of((await H4.get("/senha")).text)
+    await H4.post("/senha", data={"csrf": c4, "current": "Atende1234X", "new": "Atende5678Y", "repeat": "Atende5678Y"})
+    check("troca de senha derruba as outras sessões", (await H2.get("/chamados")).status_code == 303
+          and (await H4.get("/chamados")).status_code == 200)
+    H2 = H4
     codes = {p: (await H2.get(p)).status_code for p in ("/chamados", "/pedidos", "/fila", "/financeiro", "/clientes", "/config", "/usuarios")}
     check("atendente: acessa chamados/pedidos/fila", all(codes[p] == 200 for p in ("/chamados", "/pedidos", "/fila")), codes)
     check("atendente: bloqueado no resto", all(codes[p] == 403 for p in ("/financeiro", "/clientes", "/config", "/usuarios")), codes)

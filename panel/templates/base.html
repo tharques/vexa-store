@@ -6,8 +6,8 @@
 <link rel="icon" href="/static/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/app.css">
-<script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
-<script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+<script src="/static/vendor/htmx.min.js" defer></script>
+<script src="/static/vendor/alpine.min.js" defer></script>
 {% block head %}{% endblock %}
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ u.csrf if u else "" }}"}'>
@@ -50,6 +50,7 @@
       <div style="display:flex;gap:10px;align-items:center"><button class="btn ghost sm hamb" @click.stop="open=!open">☰</button><h1>{% block h1 %}{% endblock %}</h1></div>
       <div class="row" style="flex:0 0 auto">{% block actions %}{% endblock %}</div>
     </div>
+    {% if SANDBOX %}<div class="flash err"><b>Modo SANDBOX ligado:</b> pagamentos são simulados e qualquer pedido é aprovado sem pagar. Antes de vender, coloque <code>SANDBOX=0</code> no ENV_FILE.</div>{% endif %}
     {% if msg %}<div class="flash ok">{{ msg }}</div>{% endif %}
     {% if flash %}<div class="flash ok">{{ flash }}</div>{% endif %}
     {% if err %}<div class="flash err">{{ err }}</div>{% endif %}

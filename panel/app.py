@@ -4,6 +4,7 @@ Rodar: uvicorn panel.app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwar
 """
 import asyncio
 import csv
+from html import escape as html_esc
 import hmac
 import io
 import json
@@ -23,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from bot import asaas, fornecedores as forn, store
-from bot.config import ADMIN_IDS, BOT_TOKEN
+from bot.config import ADMIN_IDS, BOT_TOKEN, SANDBOX
 from bot.db import Repo, connect
 from bot.ui import brl
 from . import auth
@@ -70,7 +71,7 @@ def local(ts, fmt="%d/%m/%Y %H:%M"):
 
 
 T.env.filters.update(brl=lambda v: brl(v or 0), dt=local, pct=lambda v: f"{(v or 0):.1f}%".replace(".", ","))
-T.env.globals.update(STATUS=STATUS, MODES=MODES, TICKET=TICKET, ROLES=auth.ROLES, EVENT=EVENT)
+T.env.globals.update(SANDBOX=SANDBOX, STATUS=STATUS, MODES=MODES, TICKET=TICKET, ROLES=auth.ROLES, EVENT=EVENT)
 
 
 def R():
@@ -102,6 +103,12 @@ async def _forb(request, e):
     return PlainTextResponse("Acesso negado.", status_code=403)
 
 
+# scripts servidos daqui mesmo (static/vendor): nada de CDN executando código no painel
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
+       "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'")
+
+
 @app.middleware("http")
 async def headers(request, call_next):
     r = await call_next(request)
@@ -109,10 +116,19 @@ async def headers(request, call_next):
     r.headers.setdefault("X-Content-Type-Options", "nosniff")
     r.headers.setdefault("Referrer-Policy", "same-origin")
     r.headers.setdefault("Cache-Control", "no-store")
+    r.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    r.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+    r.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    r.headers.setdefault("Content-Security-Policy", CSP)
     return r
 
 
 def ip_of(request):
+    """IP real do visitante. O painel só é alcançável pelo Caddy (porta presa no 127.0.0.1), e o Caddy ACRESCENTA
+    o IP de quem conectou no fim do X-Forwarded-For. Pegar o último impede forjar IP mandando esse cabeçalho."""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[-1].strip()[:64]
     return request.client.host if request.client else ""
 
 
@@ -241,17 +257,23 @@ async def login(request: Request):
     user = str(f.get("username", "")).strip().lower()[:40]
     pw = str(f.get("password", ""))
     ip = ip_of(request)
-    keys = (f"u:{user}", f"ip:{ip}")
+    keys = (f"u:{user}", f"uip:{user}|{ip}", f"ip:{ip}")
     if await auth.locked(R(), *keys):
         return page(request, "login.html", None, error="Muitas tentativas. Aguarde 15 minutos.")
     u = await R().one("SELECT * FROM panel_users WHERE username=? AND active=1", user)
-    if not u or not auth.check_pw(pw, u["pass_hash"]):
-        await auth.fail(R(), *keys)
+    # sempre roda o bcrypt (mesmo sem usuário) para o tempo de resposta não revelar quais usuários existem
+    ok = auth.check_pw(pw, u["pass_hash"] if u else auth.DUMMY_HASH) and u is not None
+    if not ok:
+        newly = await auth.fail(R(), *keys)
         await auth.audit(R(), user or "?", "login falhou", ip=ip)
+        if newly:
+            asyncio.create_task(notify_admins(
+                f"🚨 Painel: bloqueio por tentativas erradas\nUsuário tentado: <code>{html_esc(user or '?')}</code>\n"
+                f"IP <code>{html_esc(ip)}</code> · bloqueado 15 min"))
         locked_now = await auth.locked(R(), *keys)
         return page(request, "login.html", None,
                     error="Muitas tentativas. Aguarde 15 minutos." if locked_now else "Usuário ou senha incorretos.")
-    await auth.clear_fails(R(), *keys)
+    await auth.clear_fails(R(), f"uip:{user}|{ip}", f"ip:{ip}")
     token = await auth.new_session(R(), u["id"], ip)
     await R().x("UPDATE panel_users SET last_login=CURRENT_TIMESTAMP WHERE id=?", u["id"])
     await auth.audit(R(), u["username"], "login", ip=ip)
@@ -295,6 +317,8 @@ async def senha(request: Request):
     if err:
         return page(request, "senha.html", u, error=err)
     await R().x("UPDATE panel_users SET pass_hash=?, must_change=0 WHERE id=?", auth.hash_pw(new), u["id"])
+    await R().x("DELETE FROM panel_sessions WHERE user_id=? AND token_hash!=?", u["id"],
+                auth._h(request.cookies.get(auth.COOKIE, "")))  # derruba sessões abertas em outros aparelhos
     await audit(request, u, "trocou a própria senha", "panel_users", u["username"])
     go("/", "Senha alterada.")
 
@@ -531,6 +555,8 @@ async def fornecedor_save(request: Request):
         go(f"/fornecedores/{sid or 'novo'}", err="Headers precisam ser um JSON de objeto, ex.: {\"Authorization\": \"Bearer {secret:FORN1}\"}")
     c = {"url": str(f.get("url", "")).strip(), "method": str(f.get("method") or "POST").upper(), "headers": headers,
          "body": str(f.get("body", "")), "path": str(f.get("path", "")).strip(), "timeout": num(f.get("timeout"), 20) or 20}
+    if kind in ("api", "webhook") and not forn.public_url(c["url"]):
+        go(f"/fornecedores/{sid or 'novo'}", err="URL precisa ser https/http pública (endereços internos são bloqueados).")
     if kind == "webhook":
         c["secret"] = oldc.get("secret") or secrets.token_hex(24)
         if f.get("new_secret"):
@@ -699,7 +725,7 @@ async def pedido_estornar(request: Request, oid: int):
     await R().event(o["user_id"], "suporte", f"Estorno de {brl(o['amount'])} por {u['username']}: {motivo}", o["code"])
     try:
         await tg().send_message(o["user_id"], f"↩️ <b>Estorno do pedido</b> <code>{o['code']}</code>\n"
-                                              f"<b>{brl(o['amount'])}</b> foram creditados na sua carteira.\nMotivo: {motivo}",
+                                              f"<b>{brl(o['amount'])}</b> foram creditados na sua carteira.\nMotivo: {html_esc(motivo)}",
                                 reply_markup=kb([("Ver minha conta", "me")]))
     except Exception:
         pass
@@ -870,7 +896,7 @@ async def chamado_responder(request: Request, tid: int):
     if not t or not text:
         go(f"/chamados/{tid}", err="Escreva a resposta.")
     try:
-        await tg().send_message(t["user_id"], f"💬 <b>Suporte VEXA</b> · chamado #{tid}\n{text}",
+        await tg().send_message(t["user_id"], f"💬 <b>Suporte VEXA</b> · chamado #{tid}\n{html_esc(text)}",
                                 reply_markup=kb([("Responder", f"tr:{tid}")]))
     except Exception as e:
         go(f"/chamados/{tid}", err=f"Não consegui enviar no Telegram ({type(e).__name__}).")

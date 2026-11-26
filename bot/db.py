@@ -69,6 +69,7 @@ MIGRATIONS = [
     "ALTER TABLE coupons ADD COLUMN expires_at TEXT",
     "ALTER TABLE tickets ADD COLUMN updated_at TEXT",
     "UPDATE tickets SET status='aberto' WHERE status='open'",
+    "ALTER TABLE login_fail ADD COLUMN first_at TEXT",
     "CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status)",
     "CREATE INDEX IF NOT EXISTS ix_orders_user ON orders(user_id)",
     "CREATE INDEX IF NOT EXISTS ix_stock_order ON stock(order_id)",

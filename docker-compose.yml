@@ -9,8 +9,8 @@ services:
   painel:  # painel admin (só acessível pelo Caddy, porta não publicada)
     image: vexa-store:latest
     depends_on: [vexa]
-    command: ["uvicorn", "panel.app:app", "--host", "0.0.0.0", "--port", "8000",
-              "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]
+    command: ["uvicorn", "panel.app:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers",
+              "--no-server-header"]
     env_file: .env
     volumes: ["./data:/app/data"]
     # só no localhost da VPS: o Caddy faz o HTTPS na frente
