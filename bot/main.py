@@ -29,8 +29,8 @@ repo: Repo
 bot: Bot
 BANNERS = Path(__file__).resolve().parent.parent / "assets" / "banners"
 PAGE = 6
-PIX_MIN = 5.0
-TOPUP_VALUES = [20, 50, 100, 200]  # mínimo de cobrança do Asaas
+PIX_MIN = 5.0  # mínimo de cobrança do Asaas
+TOPUP_VALUES = [20, 50, 100, 200]
 
 
 class S(StatesGroup):

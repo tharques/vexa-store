@@ -18,7 +18,7 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
   **api** (URL/método/headers/corpo com `{sku}{qtd}{pedido}`, `{secret:NOME}` lê `SUP_NOME` do .env, caminho JSON,
   3 tentativas, `Idempotency-Key` = código do pedido), **webhook** (POST com HMAC-SHA256 em `X-Vexa-Signature`;
   retorno em `POST /webhook/{id}` do painel) e **manual** (fila manual). Falhou → estorno automático em saldo + avisos.
-  Log do fornecedor fica no pedido sem segredos (`redact`). Sem userbot e sem integração com Nimo (vetado pelo dono).
+  Log do fornecedor fica no pedido sem segredos (`redact`).
 - `bot/store.py` — configurações editáveis no painel (tabela `settings`): nome, @suporte, % indicação, expiração,
   Pix/USDT on/off, prazo manual, textos do bot. O bot recarrega a cada ciclo.
 - `bot/db.py` — schema + migrações. `repo.credit/debit` movimentam saldo **sempre** com registro em `ledger`
