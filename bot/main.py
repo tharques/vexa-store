@@ -340,7 +340,33 @@ async def delete_msg(cb: CallbackQuery):
 def new_code(): return f"VX-{datetime.utcnow():%y%m%d}-{secrets.token_hex(2).upper()}"
 
 
+async def reserve_coupon(code):
+    """Reserva 1 uso do cupom (atômico). Ilimitado (-1) sempre passa."""
+    c = await repo.one("SELECT uses_left FROM coupons WHERE code=? AND active=1", code)
+    if not c:
+        return False
+    if c["uses_left"] < 0:
+        return True
+    return bool(await repo.run("UPDATE coupons SET uses_left=uses_left-1 WHERE code=? AND active=1 AND uses_left>0", code))
+
+
+async def release_coupon(o):
+    """Pedido não pago (expirou, cancelou, falhou): devolve o uso reservado."""
+    if o and o["coupon"]:
+        await repo.x("UPDATE coupons SET uses_left=uses_left+1 WHERE code=? AND uses_left>=0", o["coupon"])
+
+
+async def order_dead(oid, status):
+    """Marca pedido não pago como expirado/cancelado/falho e devolve o cupom (só uma vez)."""
+    if await repo.run(f"UPDATE orders SET status=? WHERE id=? AND status='pending'", status, oid):
+        await release_coupon(await repo.one("SELECT * FROM orders WHERE id=?", oid))
+        return True
+    return False
+
+
 async def create_order(d, method):
+    if d.get("coupon") and not await reserve_coupon(d["coupon"]):
+        return None, None  # cupom esgotou entre aplicar e pagar
     code = new_code()
     oid = await repo.x("INSERT INTO orders(code,user_id,kind,product_id,qty,amount,discount,coupon,method,usdt) "
                        "VALUES(?,?,?,?,?,?,?,?,?,?)", code, d["uid"], d["kind"], d.get("pid"), d.get("qty", 1),
@@ -360,10 +386,13 @@ async def pay(cb: CallbackQuery, state: FSMContext):
         if d.get("kind") != "buy" or "total" not in d:
             return await home(cb, state)
         await state.clear()
+        oid, code = await create_order(d, "saldo")
+        if not oid:
+            return await cb.answer("Esse cupom acabou de esgotar.", show_alert=True)
         if not await repo.debit(cb.from_user.id, d["total"], "compra"):
+            await order_dead(oid, "canceled")
             await repo.event(cb.from_user.id, "erro", f"Saldo insuficiente para {brl(d['total'])}")
             return await cb.answer("Saldo insuficiente.", show_alert=True)
-        oid, code = await create_order(d, "saldo")
         await repo.x("UPDATE ledger SET ref=? WHERE id=(SELECT MAX(id) FROM ledger WHERE user_id=? AND reason='compra')",
                      code, cb.from_user.id)
         await repo.x("UPDATE orders SET status='paid', paid_at=CURRENT_TIMESTAMP, msg_id=? WHERE id=?",
@@ -416,6 +445,8 @@ async def pix_checkout(target, state: FSMContext):
     uid = d["uid"]
     u = await repo.one("SELECT * FROM users WHERE id=?", uid)
     oid, code = await create_order(d, "pix")
+    if not oid:
+        return await screen(target, "pix", header("Cupom esgotado") + "\nEsse cupom acabou de esgotar. Refaça o pedido.", kb(back()))
     title = await order_title(oid)
     try:
         cid = await asaas.ensure_customer(uid, u["name"], u["cpf"])
@@ -423,8 +454,8 @@ async def pix_checkout(target, state: FSMContext):
     except Exception as e:
         logging.exception("pix")
         await repo.event(uid, "erro", f"Pix não gerado: {e}"[:300], code)
-        await repo.x("UPDATE orders SET status='failed' WHERE id=?", oid)
-        return await screen(target, "pix", header("Pix indisponível") + f"\nTente USDT ou mais tarde.\n<code>{e}</code>",
+        await order_dead(oid, "failed")
+        return await screen(target, "pix", header("Pix indisponível") + f"\nTente USDT ou mais tarde.\n<code>{esc(e)}</code>",
                             kb(back()))
     await repo.x("UPDATE orders SET ext_id=? WHERE id=?", px["id"], oid)
     qr = BufferedInputFile(base64.b64decode(px["qr_b64"]), filename="pix.png")
@@ -440,14 +471,16 @@ async def pix_checkout(target, state: FSMContext):
 async def usdt_checkout(cb, state):
     d = await state.get_data()
     oid, code = await create_order(d, "usdt")
+    if not oid:
+        return await screen(cb, "usdt", header("Cupom esgotado") + "\nEsse cupom acabou de esgotar. Refaça o pedido.", kb(back()))
     title = await order_title(oid)
     try:
         o = await bp.create_order(code.replace("-", ""), d["usdt"], title)
     except Exception as e:
         logging.exception("usdt")
         await repo.event(d["uid"], "erro", f"USDT não gerado: {e}"[:300], code)
-        await repo.x("UPDATE orders SET status='failed' WHERE id=?", oid)
-        return await screen(cb, "usdt", header("Binance Pay indisponível") + f"\nTente Pix.\n<code>{e}</code>",
+        await order_dead(oid, "failed")
+        return await screen(cb, "usdt", header("Binance Pay indisponível") + f"\nTente Pix.\n<code>{esc(e)}</code>",
                             kb(back()))
     await repo.x("UPDATE orders SET ext_id=? WHERE id=?", code.replace("-", ""), oid)
     cap = (f"{header('Pague em USDT', code)}\n{title}\n<b>Total  {usd(d['usdt'])}</b>\n"
@@ -485,7 +518,7 @@ async def cancel(cb: CallbackQuery, state: FSMContext):
                        cb.from_user.id)
     if o:
         await process(o)  # pagou antes de cancelar? entrega em vez de cancelar
-        if await repo.run("UPDATE orders SET status='canceled' WHERE id=? AND status='pending'", o["id"]):
+        if await order_dead(o["id"], "canceled"):
             if o["method"] == "pix" and o["ext_id"]:
                 await asaas.cancel(o["ext_id"])
         else:
@@ -504,7 +537,7 @@ async def process(o):
         except Exception:
             return
         if late != "PAID":
-            if await repo.run("UPDATE orders SET status='expired' WHERE id=? AND status='pending'", o["id"]):
+            if await order_dead(o["id"], "expired"):
                 await repo.event(o["user_id"], "pagamento", "Cobrança expirou sem pagamento", o["code"])
                 if o["method"] == "pix":
                     await asaas.cancel(o["ext_id"])
@@ -519,7 +552,7 @@ async def process(o):
             await repo.event(o["user_id"], "pagamento", f"Pagamento confirmado ({o['method']}) · {brl(o['amount'])}", o["code"])
             await deliver(o["id"])
     elif st == "EXPIRED":
-        if await repo.run("UPDATE orders SET status='expired' WHERE id=? AND status='pending'", o["id"]):
+        if await order_dead(o["id"], "expired"):
             await repo.event(o["user_id"], "pagamento", "Cobrança expirou sem pagamento", o["code"])
 
 
@@ -654,8 +687,6 @@ async def finish(oid, items=None):
                      + (f" em {ms / 1000:.1f}s após o pagamento" if ms is not None else ""), o["code"])
     await repo.x("UPDATE products SET sold=sold+? WHERE id=?", o["qty"], p["id"])
     await repo.x("UPDATE users SET spent=spent+? WHERE id=?", o["amount"], o["user_id"])
-    if o["coupon"]:
-        await repo.x("UPDATE coupons SET uses_left=uses_left-1 WHERE code=? AND uses_left>0", o["coupon"])
     u = await repo.one("SELECT ref_by FROM users WHERE id=?", o["user_id"])
     if u["ref_by"]:
         bonus = round(o["amount"] * num("ref_pct") / 100, 2)
@@ -677,16 +708,36 @@ async def finish(oid, items=None):
 
 
 async def send_delivery(o, p, items, new=False):
-    body = "\n".join(f"<code>{esc(i)}</code>" for i in items)
+    lines = [f"<code>{esc(i)}</code>" for i in items]
+    body = "\n".join(lines)
     until = (datetime.now() + timedelta(days=p["warranty_days"] or 0)).strftime("%d/%m/%Y")
-    cap = (f"✅ <b>Pagamento aprovado</b>\nPedido <code>{o['code']}</code>\n\n"
-           f"<b>{p['name']}</b>  ·  {o['qty']} un.\n{LINE}\n"
-           f"🔑 <b>Seu acesso</b>  <i>(toque para copiar)</i>\n{body}\n{LINE}\n"
-           f"🛡 Garantia até <b>{until}</b>\n"
-           f"📦 Reabra quando quiser em <b>Meus pedidos</b>")
-    await show_done(o, cap[:1024], done_kb(o), new=new)
-    if len(cap) > 1024:
-        await bot.send_message(o["user_id"], body)
+    head = f"✅ <b>Pagamento aprovado</b>\nPedido <code>{o['code']}</code>\n\n<b>{esc(p['name'])}</b>  ·  {o['qty']} un.\n{LINE}\n"
+    foot = f"{LINE}\n🛡 Garantia até <b>{until}</b>\n📦 Reabra quando quiser em <b>Meus pedidos</b>"
+    cap = f"{head}🔑 <b>Seu acesso</b>  <i>(toque para copiar)</i>\n{body}\n{foot}"
+    big = len(cap) > 1024
+    try:
+        await show_done(o, f"{head}🔑 <b>Seu acesso</b> segue nas mensagens abaixo 👇\n{foot}" if big else cap, done_kb(o), new=new)
+        if big:
+            for chunk in chunks(lines):
+                await bot.send_message(o["user_id"], chunk)
+    except Exception as e:
+        logging.exception("entrega")
+        await repo.event(o["user_id"], "erro", f"Falha ao enviar a entrega no Telegram: {type(e).__name__}", o["code"])
+        await notify_admins(f"⚠️ Não consegui enviar a entrega do pedido {o['code']} ao cliente "
+                            f"(<code>{o['user_id']}</code>). Reenvie pelo painel.")
+
+
+def chunks(lines, limit=3900):
+    """Agrupa linhas inteiras em mensagens de até ~4096 caracteres (nunca corta uma tag)."""
+    out, cur = [], ""
+    for ln in lines:
+        if cur and len(cur) + len(ln) + 1 > limit:
+            out.append(cur)
+            cur = ""
+        cur = f"{cur}\n{ln}" if cur else ln
+    if cur:
+        out.append(cur)
+    return out
 
 
 async def tick():
@@ -778,15 +829,24 @@ async def order_detail(cb: CallbackQuery):
     if not o:
         return await cb.answer("Pedido não encontrado.", show_alert=True)
     items = [i["content"] for i in await order_items(code, cb.from_user.id)] or ([o["unlimited"]] if o["unlimited"] else [])
-    cap = (f"{header(o['name'] or 'Recarga', code)}\n{brl(o['amount'])} · {o['method']} · {o['created_at'][:16]}\n\n" +
-           "\n".join(f"<code>{esc(i)}</code>" for i in items))
-    await screen(cb, "done", cap[:1024], kb([b("🛡 Acionar garantia", f"tk:{code}")], back("orders")))
+    lines = [f"<code>{esc(i)}</code>" for i in items]
+    head = f"{header(esc(o['name'] or 'Recarga'), code)}\n{brl(o['amount'])} · {o['method']} · {o['created_at'][:16]}\n\n"
+    cap = head + "\n".join(lines)
+    big = len(cap) > 1024
+    await screen(cb, "done", head + "Seu acesso segue abaixo 👇" if big else cap,
+                 kb([b("🛡 Acionar garantia", f"tk:{code}")], back("orders")))
+    if big:
+        for chunk in chunks(lines):
+            await bot.send_message(cb.from_user.id, chunk)
 
 
 @router.message(Command("pedido"))
 async def resend(m: Message, command: CommandObject):
     items = await order_items((command.args or "").strip().upper(), m.from_user.id)
-    await m.answer("\n".join(f"<code>{esc(i['content'])}</code>" for i in items) or "Pedido não encontrado.")
+    if not items:
+        return await m.answer("Pedido não encontrado.")
+    for chunk in chunks([f"<code>{esc(i['content'])}</code>" for i in items]):
+        await m.answer(chunk)
 
 
 @router.callback_query(F.data == "ref")

@@ -31,8 +31,14 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
 - Histórico de suporte: tabela `events` (middleware `Activity` no bot grava cliques, mensagens — CPF nunca —,
   pedidos, pagamentos, entregas, erros; o painel grava ações do suporte). Aparece no chamado (com pedidos, entregas,
   garantia e carteira do cliente), na ficha do cliente, no pedido e em `/logs` (admin).
+- Segurança (auditada 26/11/2026): callback_data sempre validado (`ints`, `sellable`, qtd 1..máx, recarga só
+  `TOPUP_VALUES`, pedido/garantia só do dono); texto externo escapado com `esc()` no HTML do Telegram; cupom reservado
+  na criação do pedido e devolvido se não pagar; entrega longa em mensagens separadas. Painel: IP = último
+  X-Forwarded-For (Caddy acrescenta), tentativa contada antes do bcrypt (atômico), bcrypt em thread e sempre executado,
+  limites 5 por IP e usuário+IP e 20 por usuário (exceto IPs onde o usuário já entrou), aviso de bloqueio no Telegram,
+  CSP/HSTS, JS local em `panel/static/vendor`, SSRF bloqueado em fornecedores, estorno desfaz comissão.
 - `bot/asaas.py` (Pix + `received()` para conferência), `bot/binance_pay.py` (USDT), `bot/ui.py` (identidade).
-- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 151 checagens. Roda no CI
+- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 173 checagens (inclui ataques: callback forjado, rajada de login, XFF, SSRF, HTML). Roda no CI
   antes do deploy; rode sempre após mudar bot ou painel.
 
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)
@@ -56,11 +62,10 @@ não sobe o Caddy (avisa no log) e mantém bot + painel. Secrets: `VPS_HOST`, `V
 ENV_FILE opcional: `PANEL_DOMAIN` (padrão vexa.traxor.pro) e `SUP_<NOME>=chave` para cada fornecedor API.
 A VPS também roda o bot "Gestor" (OpenClaw) — não mexer em nada fora de /opt/vexa.
 
-## Pendências — atualizado 25/11/2026
-Bot + painel no ar na VPS. Painel publicado só em 127.0.0.1:18080 na VPS.
-1. HTTPS do painel: 80/443 da VPS pertencem a um Caddy do host (Gestor). Falta incluir no Caddyfile do host o site
-   `vexa.traxor.pro { reverse_proxy 127.0.0.1:18080 }` e recarregar. Decisão do Thiago sobre como fazer.
-2. Thiago confirmar que recebeu no Telegram a senha temporária do usuário `thiago` do painel.
-3. Cadastrar produtos reais (agora pelo painel). Repo voltar para privado ao terminar.
-4. Trocar a senha root da VPS e atualizar o secret `VPS_PASSWORD`.
+## Pendências — atualizado 26/11/2026
+Bot + painel no ar: https://vexa.traxor.pro (rota no Caddy do Gestor via API admin + persistida no Caddyfile do host).
+1. Confirmar no log do deploy que `SANDBOX=0` (com 1, todo pagamento é aprovado sem pagar). O bot avisa no Telegram.
+2. Thiago: 1º login no painel (usuário `thiago`, senha temporária no Telegram) e troca de senha.
+3. Cadastrar produtos reais pelo painel. Repo voltar para privado quando houver orçamento no Actions.
+4. Trocar a senha root da VPS (ou usar chave SSH) e atualizar o secret correspondente.
 5. Binance Pay só com conta Merchant; sem chave, USDT fica oculto.

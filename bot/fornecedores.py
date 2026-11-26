@@ -209,7 +209,7 @@ async def test(sup):
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
             async with s.request("HEAD" if sup["kind"] == "webhook" else "GET", url,
-                                 headers={"User-Agent": UA}) as r:
+                                 headers={"User-Agent": UA}, allow_redirects=False) as r:
                 return r.status < 500, f"Respondeu HTTP {r.status}."
     except Exception as e:
         return False, f"Sem resposta: {type(e).__name__}."

@@ -59,6 +59,10 @@ LIMITS = {"ip": MAX_FAILS, "uip": MAX_FAILS, "u": 20}
 DUMMY_HASH = bcrypt.hashpw(b"vexa-dummy", bcrypt.gensalt(12)).decode()
 
 
+def _kind(k):
+    return k.split(":", 1)[0]
+
+
 async def locked(repo, *keys):
     for k in keys:
         r = await repo.one("SELECT locked_until FROM login_fail WHERE key=?", k)
@@ -67,26 +71,32 @@ async def locked(repo, *keys):
     return False
 
 
-async def fail(repo, *keys):
-    """Conta erros numa janela de 15 min. Devolve as chaves que acabaram de bloquear."""
-    now, newly = _now(), []
-    window_start = _iso(now - timedelta(minutes=LOCK_MIN))
+async def attempt(repo, *keys):
+    """Conta a tentativa ANTES de checar a senha, com incremento atômico, para rajadas paralelas não passarem do
+    limite. Devolve (permitido, chaves_que_acabaram_de_bloquear). Janela de 15 min."""
+    now = _iso(_now())
+    window_start = _iso(_now() - timedelta(minutes=LOCK_MIN))
+    allowed, newly = True, []
     for k in keys:
-        r = await repo.one("SELECT count, first_at FROM login_fail WHERE key=?", k)
-        if not r or not r["first_at"] or r["first_at"] < window_start:  # janela nova
-            await repo.x("INSERT OR REPLACE INTO login_fail(key,count,locked_until,first_at) VALUES(?,1,NULL,?)", k, _iso(now))
-            cnt = 1
-        else:
-            cnt = r["count"] + 1
-            await repo.x("UPDATE login_fail SET count=? WHERE key=?", cnt, k)
-        if cnt >= LIMITS.get(k.split(":", 1)[0], MAX_FAILS):
-            await repo.x("UPDATE login_fail SET count=0, first_at=NULL, locked_until=? WHERE key=?",
-                         _iso(now + timedelta(minutes=LOCK_MIN)), k)
-            newly.append(k)
-    return newly
+        # recomeça a contagem se o bloqueio já venceu ou se a janela de 15 min passou
+        await repo.x("UPDATE login_fail SET count=0, first_at=?, locked_until=NULL WHERE key=? AND "
+                     "((locked_until IS NOT NULL AND locked_until<?) OR (locked_until IS NULL AND "
+                     "(first_at IS NULL OR first_at<?)))", now, k, now, window_start)
+        await repo.x("INSERT INTO login_fail(key,count,first_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1",
+                     k, now)
+        cnt = (await repo.one("SELECT count FROM login_fail WHERE key=?", k))["count"]
+        lim = LIMITS.get(_kind(k), MAX_FAILS)
+        if cnt > lim:
+            allowed = False
+        if cnt >= lim:
+            if await repo.run("UPDATE login_fail SET locked_until=? WHERE key=? AND (locked_until IS NULL OR locked_until<?)",
+                              _iso(_now() + timedelta(minutes=LOCK_MIN)), k, now):
+                newly.append(k)
+    return allowed, newly
 
 
-async def clear_fails(repo, *keys):
+async def success(repo, *keys):
+    """Senha certa: zera os contadores dessa origem (a tentativa atual não conta como erro)."""
     for k in keys:
         await repo.x("DELETE FROM login_fail WHERE key=?", k)
 

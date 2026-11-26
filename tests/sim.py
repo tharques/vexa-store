@@ -661,6 +661,79 @@ async def painel_e_fornecedores(adm, ana):
     check("painel: bloqueia IP de metadados (SSRF)", "err=" in r.headers.get("location", ""))
     forn.ALLOW_PRIVATE = True
 
+
+    real = M.asaas.status
+    async def pending(_): return "PENDING"
+    # ── Auditoria: rajada paralela, dono não trancado, estorno de comissão, cupom com Pix pendente, entrega grande ──
+    H5 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("192.0.2.77", 5000)),
+                           base_url="https://painel.test", follow_redirects=False)
+    n0 = (await M.repo.one("SELECT COUNT(*) n FROM audit WHERE action='login falhou' AND ip='192.0.2.77'"))["n"]
+    await asyncio.gather(*[H5.post("/login", data={"username": "thiago", "password": f"chute{i}"}) for i in range(30)])
+    n1 = (await M.repo.one("SELECT COUNT(*) n FROM audit WHERE action='login falhou' AND ip='192.0.2.77'"))["n"]
+    check("login: rajada de 30 tentativas paralelas testa no máximo 5 senhas", n1 - n0 <= 5, n1 - n0)
+    await H5.aclose()
+    # 20 erros de IPs diferentes trancariam o usuário... mas não do IP onde o dono já entrou
+    for i in range(25):
+        Hx = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=(f"198.18.0.{i}", 5000)),
+                               base_url="https://painel.test", follow_redirects=False)
+        await Hx.post("/login", data={"username": "thiago", "password": "errada"}); await Hx.aclose()
+    Hd = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("203.0.113.9", 5000)),
+                           base_url="https://painel.test", follow_redirects=False)
+    r = await Hd.post("/login", data={"username": "thiago", "password": "NovaSenha123"})
+    check("login: ataque distribuído não tranca o dono no IP conhecido", r.status_code == 303, r.status_code)
+    Hn = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("198.18.9.9", 5000)),
+                           base_url="https://painel.test", follow_redirects=False)
+    r = await Hn.post("/login", data={"username": "thiago", "password": "NovaSenha123"})
+    check("login: IP novo segue bloqueado durante o ataque", r.status_code == 200 and "Aguarde" in r.text)
+    await Hd.aclose(); await Hn.aclose()
+    await M.repo.x("DELETE FROM login_fail")
+    # estorno desfaz comissão
+    ref, buyer = U(140, "Indicador"), U(141, "Indicado")
+    await ref.send("/start"); await buyer.send("/start r140")
+    await M.repo.credit(141, 50, "ajuste: teste")
+    await buyer.click("x", data=f"buy:{p_est['id']}:1") if await M.repo.stock(p_est["id"]) else None
+    await M.repo.db.executemany("INSERT INTO stock(product_id,content) VALUES(?,?)", [(p_est["id"], "EST-R")])
+    await M.repo.db.commit()
+    await buyer.click("x", data=f"buy:{p_est['id']}:1"); await buyer.click("Saldo")
+    ob = await M.repo.one("SELECT * FROM orders WHERE user_id=141 AND status='delivered' ORDER BY id DESC")
+    c0 = await bal(140)
+    await post(f"/pedidos/{ob['id']}/estornar", motivo="teste comissão")
+    check("estorno desfaz a comissão do indicador", c0 > 0 and abs(await bal(140) - (c0 - round(ob['amount'] * 0.05, 2))) < .01,
+          (c0, await bal(140)))
+    # cupom de 1 uso não vale para vários Pix pendentes
+    await post("/cupons/salvar", code="UMAVEZ", pct="50", uses="1", expires_at="")
+    cp = U(142, "Cupom"); await cp.send("/start")
+    await M.repo.x("UPDATE users SET cpf='52998224725' WHERE id=142")
+    M.asaas.status = pending
+    codes = []
+    for _ in range(3):
+        await cp.click("x", data=f"buy:{p_api['id']}:1"); await cp.click("Tenho cupom"); await cp.send("UMAVEZ")
+        if cp.has("Pix"):
+            await cp.click("Pix")
+    M.asaas.status = real
+    n = (await M.repo.one("SELECT COUNT(*) n FROM orders WHERE user_id=142 AND coupon='UMAVEZ' AND status='pending'"))["n"]
+    check("cupom de 1 uso: só 1 pedido pendente com desconto", n == 1, n)
+    o1 = await M.repo.one("SELECT * FROM orders WHERE user_id=142 AND coupon='UMAVEZ' AND status='pending'")
+    await M.repo.x("UPDATE orders SET created_at=datetime('now','-2 hours') WHERE id=?", o1["id"])
+    M.asaas.status = pending
+    await M.process(await M.repo.one("SELECT * FROM orders WHERE id=?", o1["id"]))
+    M.asaas.status = real
+    check("cupom: pedido expirado devolve o uso", (await M.repo.one("SELECT uses_left FROM coupons WHERE code='UMAVEZ'"))["uses_left"] == 1)
+    # entrega grande (10 códigos longos com caracteres HTML) chega inteira
+    big = U(143, "Grande"); await big.send("/start")
+    await M.repo.credit(143, 500, "ajuste: teste")
+    await M.repo.x("UPDATE products SET max_qty=10 WHERE id=?", p_est["id"])
+    await M.repo.db.executemany("INSERT INTO stock(product_id,content) VALUES(?,?)",
+                                [(p_est["id"], f"LOGIN{i}<&>" + "x" * 120) for i in range(10)])
+    await M.repo.db.commit()
+    await big.click("x", data=f"buy:{p_est['id']}:10"); await big.click("Saldo")
+    allmsg = "\n".join(m["text"] for m in tg.chats[143])
+    ob = await M.repo.one("SELECT id FROM orders WHERE user_id=143 ORDER BY id DESC")
+    got = [r["content"] for r in await M.repo.q("SELECT content FROM stock WHERE order_id=?", ob["id"])]
+    check("entrega grande: 10 itens chegam inteiros, escapados e em mensagens válidas",
+          len(got) == 10 and all(_html.escape(g, quote=False) in allmsg for g in got) and "&lt;&amp;&gt;" in allmsg
+          and all(len(m["text"]) <= 4096 for m in tg.chats[143]))
+
     # ── todas as telas abrem ──
     o1 = await M.repo.one("SELECT id FROM orders ORDER BY id DESC")
     pages = ["/", "/produtos", f"/produtos/{p_api['id']}", "/produtos/novo", "/fornecedores", f"/fornecedores/{sups['Hook']['id']}",

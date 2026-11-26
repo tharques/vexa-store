@@ -257,23 +257,29 @@ async def login(request: Request):
     user = str(f.get("username", "")).strip().lower()[:40]
     pw = str(f.get("password", ""))
     ip = ip_of(request)
-    keys = (f"u:{user}", f"uip:{user}|{ip}", f"ip:{ip}")
+    known = bool(user) and await R().one("SELECT 1 FROM panel_known_ips WHERE username=? AND ip=?", user, ip)
+    # o bloqueio só por nome de usuário não vale para um IP de onde esse usuário já entrou (atacante não tranca o dono)
+    keys = (f"uip:{user}|{ip}", f"ip:{ip}") + (() if known else (f"u:{user}",))
     if await auth.locked(R(), *keys):
         return page(request, "login.html", None, error="Muitas tentativas. Aguarde 15 minutos.")
+    allowed, newly = await auth.attempt(R(), *keys)
+    if newly:
+        asyncio.create_task(notify_admins(
+            f"🚨 Painel: bloqueio por tentativas erradas\nUsuário tentado: <code>{html_esc(user or '?')}</code>\n"
+            f"IP <code>{html_esc(ip)}</code> · bloqueado 15 min"))
+    if not allowed:
+        await auth.audit(R(), user or "?", "login recusado (bloqueado)", ip=ip)
+        return page(request, "login.html", None, error="Muitas tentativas. Aguarde 15 minutos.")
     u = await R().one("SELECT * FROM panel_users WHERE username=? AND active=1", user)
-    # sempre roda o bcrypt (mesmo sem usuário) para o tempo de resposta não revelar quais usuários existem
-    ok = auth.check_pw(pw, u["pass_hash"] if u else auth.DUMMY_HASH) and u is not None
+    # bcrypt fora do loop (não trava o painel) e sempre executado (tempo não revela se o usuário existe)
+    ok = await asyncio.to_thread(auth.check_pw, pw, u["pass_hash"] if u else auth.DUMMY_HASH) and u is not None
     if not ok:
-        newly = await auth.fail(R(), *keys)
         await auth.audit(R(), user or "?", "login falhou", ip=ip)
-        if newly:
-            asyncio.create_task(notify_admins(
-                f"🚨 Painel: bloqueio por tentativas erradas\nUsuário tentado: <code>{html_esc(user or '?')}</code>\n"
-                f"IP <code>{html_esc(ip)}</code> · bloqueado 15 min"))
         locked_now = await auth.locked(R(), *keys)
         return page(request, "login.html", None,
                     error="Muitas tentativas. Aguarde 15 minutos." if locked_now else "Usuário ou senha incorretos.")
-    await auth.clear_fails(R(), f"uip:{user}|{ip}", f"ip:{ip}")
+    await auth.success(R(), f"uip:{user}|{ip}", f"ip:{ip}")
+    await R().x("INSERT OR IGNORE INTO panel_known_ips(username, ip) VALUES(?,?)", user, ip)
     token = await auth.new_session(R(), u["id"], ip)
     await R().x("UPDATE panel_users SET last_login=CURRENT_TIMESTAMP WHERE id=?", u["id"])
     await auth.audit(R(), u["username"], "login", ip=ip)
@@ -306,7 +312,7 @@ async def senha(request: Request):
     f = await form(request, u)
     cur, new, rep = str(f.get("current", "")), str(f.get("new", "")), str(f.get("repeat", ""))
     err = None
-    if not auth.check_pw(cur, u["pass_hash"]):
+    if not await asyncio.to_thread(auth.check_pw, cur, u["pass_hash"]):
         err = "Senha atual incorreta."
     elif new != rep:
         err = "As senhas novas não conferem."
@@ -316,7 +322,7 @@ async def senha(request: Request):
         err = auth.weak_reason(new)
     if err:
         return page(request, "senha.html", u, error=err)
-    await R().x("UPDATE panel_users SET pass_hash=?, must_change=0 WHERE id=?", auth.hash_pw(new), u["id"])
+    await R().x("UPDATE panel_users SET pass_hash=?, must_change=0 WHERE id=?", await asyncio.to_thread(auth.hash_pw, new), u["id"])
     await R().x("DELETE FROM panel_sessions WHERE user_id=? AND token_hash!=?", u["id"],
                 auth._h(request.cookies.get(auth.COOKIE, "")))  # derruba sessões abertas em outros aparelhos
     await audit(request, u, "trocou a própria senha", "panel_users", u["username"])
@@ -721,7 +727,12 @@ async def pedido_estornar(request: Request, oid: int):
     if not await R().run("UPDATE orders SET status='refunded' WHERE id=? AND status=?", oid, o["status"]):
         go(f"/pedidos/{oid}", err="O pedido mudou de status; recarregue.")
     await R().credit(o["user_id"], o["amount"], "estorno", o["code"])
-    await audit(request, u, "estornou em saldo", "orders", o["code"], {"valor": o["amount"], "motivo": motivo})
+    com = await R().one("SELECT user_id, delta FROM ledger WHERE ref=? AND reason='comissao'", o["code"])
+    if com and not await R().one("SELECT 1 FROM ledger WHERE ref=? AND reason='comissao estornada'", o["code"]):
+        await R().credit(com["user_id"], -com["delta"], "comissao estornada", o["code"])  # pode ficar negativo
+        await R().x("UPDATE users SET ref_earned=ref_earned-? WHERE id=?", com["delta"], com["user_id"])
+    await audit(request, u, "estornou em saldo", "orders", o["code"],
+                {"valor": o["amount"], "motivo": motivo, "comissao_desfeita": com["delta"] if com else 0})
     await R().event(o["user_id"], "suporte", f"Estorno de {brl(o['amount'])} por {u['username']}: {motivo}", o["code"])
     try:
         await tg().send_message(o["user_id"], f"↩️ <b>Estorno do pedido</b> <code>{o['code']}</code>\n"
