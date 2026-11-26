@@ -109,9 +109,27 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'")
 
 
+# O painel é só do dono: sem a "porta" (cookie criado pelo link de uso único que o bot manda em /painel),
+# tudo responde 404 como se o site não existisse. Ficam abertos só o retorno de fornecedores e o health.
+PUBLIC = ("/webhook/", "/entrar/")
+DOOR = "vx_door"
+DOOR_DAYS = 30
+
+
+async def door_ok(request):
+    tok = request.cookies.get(DOOR)
+    if not tok or len(tok) > 100:
+        return False
+    return bool(await R().one("SELECT 1 FROM panel_doors WHERE token_hash=? AND expires_at>datetime('now')", auth._h(tok)))
+
+
 @app.middleware("http")
 async def headers(request, call_next):
-    r = await call_next(request)
+    path = request.url.path
+    if path != "/health" and not path.startswith(PUBLIC) and not await door_ok(request):
+        r = JSONResponse({"detail": "Not Found"}, status_code=404)
+    else:
+        r = await call_next(request)
     r.headers.setdefault("X-Frame-Options", "DENY")
     r.headers.setdefault("X-Content-Type-Options", "nosniff")
     r.headers.setdefault("Referrer-Policy", "same-origin")
@@ -229,7 +247,7 @@ async def bootstrap():
         return
     pw = auth.strong_password()
     ok = await notify_admins(
-        "🔐 <b>Painel VEXA criado</b>\nhttps://vexa.traxor.pro\n\n"
+        "🔐 <b>Painel VEXA criado</b>\nPara abrir, mande /painel aqui no bot.\n\n"
         f"Usuário: <code>thiago</code>\nSenha temporária: <code>{pw}</code>\n\n"
         "Você vai trocar a senha no primeiro acesso. Apague esta mensagem depois.")
     if not ok:
@@ -238,6 +256,24 @@ async def bootstrap():
     await R().x("INSERT INTO panel_users(username,pass_hash,role,must_change) VALUES('thiago',?,'admin',1)", auth.hash_pw(pw))
     await auth.audit(R(), "sistema", "usuário criado", "panel_users", "thiago", "admin inicial; senha enviada no Telegram")
     log.info("usuário 'thiago' criado; senha temporária enviada no Telegram")
+
+
+@app.get("/entrar/{token}")
+async def entrar(request: Request, token: str):
+    """Consome o link de uso único e grava a porta neste navegador por 30 dias."""
+    if len(token) > 100 or not await R().run(
+            "UPDATE panel_links SET used=1 WHERE token_hash=? AND used=0 AND expires_at>datetime('now')", auth._h(token)):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    door = secrets.token_urlsafe(32)
+    ip = ip_of(request)
+    await R().x("INSERT INTO panel_doors(token_hash,expires_at,ip) VALUES(?, datetime('now', ?), ?)",
+                auth._h(door), f"+{DOOR_DAYS} days", ip)
+    await auth.audit(R(), "sistema", "porta do painel aberta", ip=ip)
+    asyncio.create_task(notify_admins(f"🚪 Painel liberado num aparelho · IP <code>{html_esc(ip)}</code>\n"
+                                      "Se não foi você, avise o suporte técnico."))
+    r = RedirectResponse("/login", status_code=303)
+    r.set_cookie(DOOR, door, max_age=DOOR_DAYS * 86400, httponly=True, secure=True, samesite="lax")
+    return r
 
 
 @app.get("/health")

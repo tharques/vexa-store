@@ -403,8 +403,41 @@ async def painel_e_fornecedores(adm, ana):
     os.environ["SUP_FORN1"] = "chave-super-secreta-123"
     base, calls, runner = await fake_supplier()
     P.ctx.update(repo=M.repo, bot=bot)
-    H = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("203.0.113.9", 5000)),
-                          base_url="https://painel.test", follow_redirects=False)
+
+    async def mk(ip, port=5000, door=True):
+        """Cliente do painel; por padrão já passou pela porta (link de uso único do /painel)."""
+        c = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=(ip, port)),
+                              base_url="https://painel.test", follow_redirects=False)
+        if door:
+            await c.get(f"/entrar/{await M.repo.panel_link()}")
+        return c
+
+    # ── porta: sem o link do bot, o painel não existe para a internet ──
+    X = await mk("203.0.113.66", door=False)
+    codes = {pth: (await X.get(pth)).status_code for pth in ("/", "/login", "/produtos", "/static/app.css", "/senha")}
+    check("porta: sem o link do bot tudo responde 404", all(v == 404 for v in codes.values()), codes)
+    r = await X.post("/login", data={"username": "thiago", "password": "x"})
+    check("porta: login nem aceita tentativa sem a porta", r.status_code == 404)
+    check("porta: health segue público", (await X.get("/health")).status_code == 200)
+    n_adm = len(tg.chats[ADMIN])
+    await adm.send("/painel")
+    btn = tg.chats[ADMIN][-1]["kb"].inline_keyboard[0][0].url if tg.chats[ADMIN][-1]["kb"] else ""
+    check("/painel: admin recebe botão com link de uso único", "/entrar/" in btn and "http" not in tg.chats[ADMIN][-1]["text"])
+    tok = btn.rsplit("/", 1)[-1]
+    intruso = U(131, "Intruso2"); await intruso.send("/painel")
+    check("/painel: não-admin não recebe link", not any("/entrar/" in str(m["kb"]) for m in tg.chats.get(131, [])))
+    r = await X.get(f"/entrar/{tok}")
+    check("porta: link abre e leva ao login", r.status_code == 303 and r.headers["location"] == "/login"
+          and "httponly" in r.headers.get("set-cookie", "").lower())
+    check("porta: depois do link, tela de login aparece", (await X.get("/login")).status_code == 200)
+    X2 = await mk("203.0.113.67", door=False)
+    check("porta: link já usado não abre de novo", (await X2.get(f"/entrar/{tok}")).status_code == 404)
+    old = await M.repo.panel_link(minutes=-1)
+    check("porta: link vencido não abre", (await X2.get(f"/entrar/{old}")).status_code == 404)
+    check("porta: token inventado não abre", (await X2.get("/entrar/abc123")).status_code == 404)
+    check("porta: aviso no Telegram quando o painel é liberado", any("Painel liberado" in m["text"] for m in tg.chats[ADMIN][n_adm:]))
+    await X.aclose(); await X2.aclose()
+    H = await mk("203.0.113.9", 5000)
 
     # ── 1º deploy: usuário thiago com senha temporária só no Telegram ──
     await P.bootstrap()
@@ -523,7 +556,9 @@ async def painel_e_fornecedores(adm, ana):
     secret = forn.conf(sups["Hook"])["secret"]
     check("webhook: POST assinado com HMAC", forn.check_sig(secret, h["raw"], h["sig"]) and _json.loads(h["raw"])["pedido"] == o["code"])
     ret = _json.dumps({"pedido": o["code"], "itens": ["HOOK-OK-1"]}).encode()
-    r = await H.post(f"/webhook/{sups['Hook']['id']}", content=ret, headers={"X-Vexa-Signature": "sha256=errada"})
+    Xw = await mk("203.0.113.70", door=False)
+    r = await Xw.post(f"/webhook/{sups['Hook']['id']}", content=ret, headers={"X-Vexa-Signature": "sha256=errada"})
+    await Xw.aclose()
     check("webhook: retorno com assinatura errada é recusado", r.status_code == 401)
     r = await H.post(f"/webhook/{sups['Hook']['id']}", content=ret, headers={"X-Vexa-Signature": forn.sign(secret, ret)})
     check("webhook: retorno assinado aceito", r.status_code == 200 and r.json()["status"] == "ready", r.text)
@@ -645,8 +680,7 @@ async def painel_e_fornecedores(adm, ana):
     check("painel: cabeçalhos de segurança (HSTS, CSP, frame)", "max-age" in hd.get("strict-transport-security", "")
           and "frame-ancestors 'none'" in hd.get("content-security-policy", "") and hd.get("x-frame-options") == "DENY")
     check("painel: nenhum script de CDN externo", "unpkg.com" not in (await H.get("/")).text and "jsdelivr" not in (await H.get("/")).text)
-    H3 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("192.0.2.50", 5000)),
-                           base_url="https://painel.test", follow_redirects=False)
+    H3 = await mk("192.0.2.50", 5000)
     for i in range(5):
         await H3.post("/login", data={"username": f"x{i}", "password": "y"})
     # o atacante manda X-Forwarded-For falso; o Caddy acrescenta o IP real no fim
@@ -665,8 +699,7 @@ async def painel_e_fornecedores(adm, ana):
     real = M.asaas.status
     async def pending(_): return "PENDING"
     # ── Auditoria: rajada paralela, dono não trancado, estorno de comissão, cupom com Pix pendente, entrega grande ──
-    H5 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("192.0.2.77", 5000)),
-                           base_url="https://painel.test", follow_redirects=False)
+    H5 = await mk("192.0.2.77", 5000)
     n0 = (await M.repo.one("SELECT COUNT(*) n FROM audit WHERE action='login falhou' AND ip='192.0.2.77'"))["n"]
     await asyncio.gather(*[H5.post("/login", data={"username": "thiago", "password": f"chute{i}"}) for i in range(30)])
     n1 = (await M.repo.one("SELECT COUNT(*) n FROM audit WHERE action='login falhou' AND ip='192.0.2.77'"))["n"]
@@ -674,15 +707,12 @@ async def painel_e_fornecedores(adm, ana):
     await H5.aclose()
     # 20 erros de IPs diferentes trancariam o usuário... mas não do IP onde o dono já entrou
     for i in range(25):
-        Hx = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=(f"198.18.0.{i}", 5000)),
-                               base_url="https://painel.test", follow_redirects=False)
+        Hx = await mk(f"198.18.0.{i}", 5000)
         await Hx.post("/login", data={"username": "thiago", "password": "errada"}); await Hx.aclose()
-    Hd = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("203.0.113.9", 5000)),
-                           base_url="https://painel.test", follow_redirects=False)
+    Hd = await mk("203.0.113.9", 5000)
     r = await Hd.post("/login", data={"username": "thiago", "password": "NovaSenha123"})
     check("login: ataque distribuído não tranca o dono no IP conhecido", r.status_code == 303, r.status_code)
-    Hn = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("198.18.9.9", 5000)),
-                           base_url="https://painel.test", follow_redirects=False)
+    Hn = await mk("198.18.9.9", 5000)
     r = await Hn.post("/login", data={"username": "thiago", "password": "NovaSenha123"})
     check("login: IP novo segue bloqueado durante o ataque", r.status_code == 200 and "Aguarde" in r.text)
     await Hd.aclose(); await Hn.aclose()
@@ -754,13 +784,11 @@ async def painel_e_fornecedores(adm, ana):
     r = await post("/usuarios/salvar", username="ana.suporte", role="atendente")
     pw2 = _re.search(r'<code style="font-size:14px">([^<]+)</code>', r.text)
     check("usuários: cria atendente com senha temporária", pw2 is not None)
-    H2 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("198.51.100.7", 5000)),
-                           base_url="https://painel.test", follow_redirects=False)
+    H2 = await mk("198.51.100.7", 5000)
     await H2.post("/login", data={"username": "ana.suporte", "password": _html.unescape(pw2.group(1))})
     c2 = csrf_of((await H2.get("/senha")).text)
     await H2.post("/senha", data={"csrf": c2, "current": _html.unescape(pw2.group(1)), "new": "Atende1234X", "repeat": "Atende1234X"})
-    H4 = httpx.AsyncClient(transport=httpx.ASGITransport(app=P.app, client=("198.51.100.8", 5000)),
-                           base_url="https://painel.test", follow_redirects=False)
+    H4 = await mk("198.51.100.8", 5000)
     await H4.post("/login", data={"username": "ana.suporte", "password": "Atende1234X"})
     c4 = csrf_of((await H4.get("/senha")).text)
     await H4.post("/senha", data={"csrf": c4, "current": "Atende1234X", "new": "Atende5678Y", "repeat": "Atende5678Y"})

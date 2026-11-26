@@ -34,3 +34,6 @@ USDT_SPREAD = float(os.getenv("USDT_SPREAD", "0.02"))  # 2% sobre a cotação
 
 # Fidelidade
 REF_BONUS_PCT = float(os.getenv("REF_BONUS_PCT", "5"))  # % da compra do indicado vira saldo de quem indicou
+
+# Painel admin
+PANEL_DOMAIN = _clean(os.getenv("PANEL_DOMAIN", "vexa.traxor.pro"))

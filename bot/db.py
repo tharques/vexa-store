@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import os
+import secrets
 import aiosqlite
 from .config import DB_PATH
 
@@ -45,6 +47,8 @@ CREATE TABLE IF NOT EXISTS login_fail(key TEXT PRIMARY KEY, count INTEGER DEFAUL
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, kind TEXT, detail TEXT, ref TEXT DEFAULT '',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS panel_links(token_hash TEXT PRIMARY KEY, expires_at TEXT, used INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS panel_doors(token_hash TEXT PRIMARY KEY, expires_at TEXT, ip TEXT);
 CREATE TABLE IF NOT EXISTS panel_known_ips(username TEXT, ip TEXT, PRIMARY KEY(username, ip));
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, who TEXT, action TEXT, entity TEXT, entity_id TEXT, detail TEXT, ip TEXT,
@@ -139,6 +143,13 @@ class Repo:
             await self.x("INSERT INTO events(user_id,kind,detail,ref) VALUES(?,?,?,?)", uid, kind, str(detail)[:500], ref or "")
         except Exception:
             pass
+
+    async def panel_link(self, minutes=10):
+        """Link de uso único que abre a 'porta' do painel (só o admin recebe, pelo bot)."""
+        token = secrets.token_urlsafe(32)
+        await self.x("INSERT INTO panel_links(token_hash,expires_at) VALUES(?, datetime('now', ?))",
+                     hashlib.sha256(token.encode()).hexdigest(), f"+{int(minutes)} minutes")
+        return token
 
     async def setting(self, key, default=None):
         r = await self.one("SELECT value FROM settings WHERE key=?", key)

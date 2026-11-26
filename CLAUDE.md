@@ -31,6 +31,9 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
 - Histórico de suporte: tabela `events` (middleware `Activity` no bot grava cliques, mensagens — CPF nunca —,
   pedidos, pagamentos, entregas, erros; o painel grava ações do suporte). Aparece no chamado (com pedidos, entregas,
   garantia e carteira do cliente), na ficha do cliente, no pedido e em `/logs` (admin).
+- **Painel invisível**: só o dono usa. Sem a "porta" tudo responde 404 (inclusive /login). A porta é um link de uso
+  único (10 min) que o bot manda ao admin com `/painel` → `/entrar/<token>` grava cookie `vx_door` por 30 dias
+  (tabelas `panel_links`/`panel_doors`); depois vem usuário + senha. Públicos só `/health` e `/webhook/*`.
 - Segurança (auditada 26/11/2026): callback_data sempre validado (`ints`, `sellable`, qtd 1..máx, recarga só
   `TOPUP_VALUES`, pedido/garantia só do dono); texto externo escapado com `esc()` no HTML do Telegram; cupom reservado
   na criação do pedido e devolvido se não pagar; entrega longa em mensagens separadas. Painel: IP = último
@@ -38,7 +41,7 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
   limites 5 por IP e usuário+IP e 20 por usuário (exceto IPs onde o usuário já entrou), aviso de bloqueio no Telegram,
   CSP/HSTS, JS local em `panel/static/vendor`, SSRF bloqueado em fornecedores, estorno desfaz comissão.
 - `bot/asaas.py` (Pix + `received()` para conferência), `bot/binance_pay.py` (USDT), `bot/ui.py` (identidade).
-- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 173 checagens (inclui ataques: callback forjado, rajada de login, XFF, SSRF, HTML). Roda no CI
+- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 184 checagens (inclui ataques: callback forjado, rajada de login, XFF, SSRF, HTML). Roda no CI
   antes do deploy; rode sempre após mudar bot ou painel.
 
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)
@@ -65,7 +68,7 @@ A VPS também roda o bot "Gestor" (OpenClaw) — não mexer em nada fora de /opt
 ## Pendências — atualizado 26/11/2026
 Bot + painel no ar: https://vexa.traxor.pro (rota no Caddy do Gestor via API admin + persistida no Caddyfile do host).
 1. Confirmar no log do deploy que `SANDBOX=0` (com 1, todo pagamento é aprovado sem pagar). O bot avisa no Telegram.
-2. Thiago: 1º login no painel (usuário `thiago`, senha temporária no Telegram) e troca de senha.
+2. Thiago: mandar /painel no bot → botão "Abrir painel" → usuário `thiago` + senha temporária (Telegram) → trocar senha.
 3. Cadastrar produtos reais pelo painel. Repo voltar para privado quando houver orçamento no Actions.
 4. Trocar a senha root da VPS (ou usar chave SSH) e atualizar o secret correspondente.
 5. Binance Pay só com conta Merchant; sem chave, USDT fica oculto.

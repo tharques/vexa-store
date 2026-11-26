@@ -18,7 +18,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BufferedInputFile, CallbackQuery, FSInputFile, InputMediaPhoto, Message)
 
 from . import asaas, binance_pay as bp, fornecedores as forn, store
-from .config import ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, POLL_SECONDS, SANDBOX
+from .config import ADMIN_IDS, BOT_TOKEN, CHANNEL_ID, PANEL_DOMAIN, POLL_SECONDS, SANDBOX
 from .db import Repo, connect
 from .store import cfg, num, on
 from .ui import LINE, b, back, brl, header, home_kb, kb, stock_badge, usd
@@ -932,7 +932,10 @@ ADMIN_HELP = f"""<b>Painel admin</b>
 /vendas — resumo
 /cupom CODIGO|%|usos (-1 = ilimitado)
 /credito user_id|valor · /responder user_id texto
-/aviso texto — mensagem para todos os clientes"""
+/aviso texto — mensagem para todos os clientes
+
+<b>Painel web</b>
+/painel — link de acesso ao painel (uso único)"""
 
 
 def admin_msg(m: Message): return is_admin(m.from_user.id)
@@ -947,6 +950,15 @@ def args(m, n):
 
 @router.message(Command("admin"), admin_msg)
 async def a_help(m: Message): await m.answer(ADMIN_HELP)
+
+
+@router.message(Command("painel"), admin_msg)
+async def a_panel(m: Message):
+    """Abre a porta do painel neste aparelho: link de uso único, 10 min (só em botão, sem prévia que o consuma)."""
+    token = await repo.panel_link()
+    await m.answer("🔐 <b>Painel VEXA</b>\nToque no botão para abrir o painel neste aparelho.\n"
+                   "<i>Link de uso único, vale 10 minutos. Depois entre com usuário e senha.</i>",
+                   reply_markup=kb([b("Abrir painel", url=f"https://{PANEL_DOMAIN}/entrar/{token}")]))
 
 
 @router.message(Command("cat"), admin_msg)
