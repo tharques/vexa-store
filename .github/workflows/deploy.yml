@@ -23,7 +23,7 @@ jobs:
           username: ${{ secrets.VPS_USER || 'root' }}
           password: ${{ secrets.VPS_PASSWORD }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: ENV_FILE,REPO,TOKEN
+          envs: ENV_FILE,SUP_KEYS,REPO,TOKEN
           script: |
             set -e
             command -v docker >/dev/null || (curl -fsSL https://get.docker.com | sh)
@@ -33,6 +33,13 @@ jobs:
             git fetch -q origin main && git reset -q --hard origin/main
             # escapa '$' (docker compose interpola variáveis no env_file; chave Asaas começa com '$')
             printf '%s\n' "$ENV_FILE" | sed 's/\$\$/$/g; s/\$/$$/g' > .env
+            # chaves de fornecedores ficam num secret separado (SUP_KEYS): só linhas SUP_NOME=valor
+            if [ -n "$SUP_KEYS" ]; then
+              # aceita "SUP_NOME=chave" ou só a chave colada (vira SUP_FORN1)
+              KEYS=$(printf '%s\n' "$SUP_KEYS" | tr -d '\r' | awk 'NF{ if ($0 ~ /^SUP_[A-Z0-9_]+=/) print; else if ($0 !~ /=/ && !d) { print "SUP_FORN1=" $1; d=1 } }')
+              printf '%s\n' "$KEYS" | sed 's/\$\$/$/g; s/\$/$$/g' >> .env
+              echo "chaves de fornecedor carregadas: $(printf '%s\n' "$KEYS" | grep -c '^SUP_')"
+            fi
             chmod 600 .env
             # Caddy (HTTPS do painel) só sobe se 80/443 estiverem livres ou já forem do nosso Caddy
             OURS=$(docker compose --profile https ps -q caddy 2>/dev/null || true)
@@ -87,5 +94,6 @@ jobs:
     env:
       HAS_VPS: ${{ secrets.VPS_HOST != '' && (secrets.VPS_PASSWORD != '' || secrets.VPS_SSH_KEY != '') && secrets.ENV_FILE != '' }}
       ENV_FILE: ${{ secrets.ENV_FILE }}
+      SUP_KEYS: ${{ secrets.SUP_KEYS }}
       REPO: ${{ github.repository }}
       TOKEN: ${{ github.token }}

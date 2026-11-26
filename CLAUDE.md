@@ -67,7 +67,8 @@ Tom: limpo, estilo Stripe. Nada de "◆" ou linhas longas; títulos em negrito +
 `.github/workflows/deploy.yml`: a cada push em `main`, roda a simulação, entra por SSH na VPS, clona em `/opt/vexa`,
 grava `.env` a partir do secret e sobe o compose. **Antes do Caddy verifica 80/443**: se outro serviço estiver usando,
 não sobe o Caddy (avisa no log) e mantém bot + painel. Secrets: `VPS_HOST`, `VPS_PASSWORD` (ou `VPS_SSH_KEY`), `ENV_FILE`.
-ENV_FILE opcional: `PANEL_DOMAIN` (padrão vexa.traxor.pro) e `SUP_<NOME>=chave` para cada fornecedor API.
+ENV_FILE opcional: `PANEL_DOMAIN` (padrão vexa.traxor.pro). Chaves de fornecedor ficam no secret **`SUP_KEYS`**
+(linhas `SUP_NOME=chave`, ou só a chave → vira `SUP_FORN1`); o deploy acrescenta ao .env sem tocar no ENV_FILE.
 A VPS também roda o bot "Gestor" (OpenClaw) — não mexer em nada fora de /opt/vexa.
 
 ## Pendências — atualizado 26/11/2026
