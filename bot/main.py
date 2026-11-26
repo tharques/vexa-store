@@ -651,17 +651,35 @@ async def deliver(oid):
     log_lines = []
     await repo.x("UPDATE orders SET sent_at=CURRENT_TIMESTAMP WHERE id=?", oid)
     await olog(oid, f"enviado ao fornecedor {sup['name']} ({mode})")
+    info = {}
     try:
-        if mode == "api":
+        if mode == "api" and sup["kind"] == "buyer":
+            items, info = await forn.buyer_purchase(sup, p["sku"] or "", o["qty"], o["code"], log_lines.append)
+        elif mode == "api":
             items = await forn.call_api(sup, p["sku"] or "", o["qty"], o["code"], log_lines.append)
         else:
             await forn.call_webhook(sup, {"pedido": o["code"], "sku": p["sku"] or "", "qtd": o["qty"],
                                           "produto": p["name"], "valor": o["amount"]}, log_lines.append)
             items = None
+    except forn.SupplierPending as e:
+        # o fornecedor cobrou e vai concluir do lado dele: segue para a fila manual (nada de estorno automático)
+        for ln in log_lines:
+            await olog(oid, ln)
+        await repo.x("UPDATE orders SET status='manual' WHERE id=? AND status='delivering'", oid)
+        await olog(oid, f"fornecedor vai concluir manualmente (pedido lá: {e})")
+        await repo.event(o["user_id"], "entrega", "Fornecedor aceitou; conclusão manual pendente", o["code"])
+        await preparing(o, p)
+        return await notify_admins(f"🧾 Fila manual · {o['code']} · {esc(p['name'])} ×{o['qty']}\n"
+                                   f"O fornecedor {esc(sup['name'])} cobrou e vai concluir (pedido lá: {esc(str(e))}). "
+                                   "Quando receber, cole a entrega na Fila manual do painel.")
     except Exception as e:
         for ln in log_lines:
             await olog(oid, ln)
         return await refund_fail(o, p, f"{sup['name']}: {e}")
+    min_bal = forn.conf(sup).get("min_balance")
+    if info.get("balance") is not None and min_bal and float(info["balance"]) < float(min_bal):
+        await notify_admins(f"💰 Saldo baixo no fornecedor {esc(sup['name'])}: {esc(info.get('balance_text') or info['balance'])}. "
+                            "Recarregue para não falhar entregas.")
     for ln in log_lines:
         await olog(oid, ln)
     if items is None:  # webhook: aguarda o retorno no painel

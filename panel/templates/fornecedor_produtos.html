@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block title %}Produtos · {{ s.name }}{% endblock %}{% block h1 %}Produtos de {{ s.name }}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/fornecedores/{{ s.id }}">‹ Fornecedor</a>{% endblock %}
+{% block body %}
+{% if erro %}<div class="flash err">Não consegui ler o fornecedor: {{ erro }}</div>{% endif %}
+{% if bal %}<div class="grid g3" style="margin-bottom:16px"><div class="kpi hl"><div class="l">Seu saldo no fornecedor</div><div class="v">{{ bal.balanceText or bal.balance }}</div>
+<div class="s">moeda {{ bal.walletCurrency }}</div></div></div>{% endif %}
+<div class="card"><p class="small muted">Escolha o que revender e clique em <b>Vender na loja</b>: o produto abre já ligado a este fornecedor
+(modo API, SKU preenchido). Você só define categoria, preço de venda e custo.</p>
+<div class="tw"><table><tr><th>Produto</th><th>Tipo</th><th class="r">Preço lá</th><th class="r">Disponível</th><th>Observação</th><th></th></tr>
+{% for x in prods %}{% set req = x.purchaseRequirements or {} %}{% set needs = req.customerEmail or req.customerAccounts or req.slotMonths %}
+<tr><td><b>{{ x.name }}</b><div class="small muted"><code>{{ x.productId }}</code></div></td><td>{{ x.productType }}</td>
+<td class="r">{{ x.price.text if x.price else '—' }}</td><td class="r">{{ x.availability.available if x.availability else '—' }}</td>
+<td class="small">{% if needs %}<span class="pill amber">exige dados do cliente</span>{% endif %}
+{% for pr in x.promotions or [] %}<div>{{ pr.minQty }}+ un.: {{ pr.percent }}%{% if pr.bonusQty %} +{{ pr.bonusQty }} bônus{% endif %}</div>{% endfor %}</td>
+<td class="r">{% if mine.get(x.productId) %}<a class="btn ghost sm" href="/produtos/{{ mine[x.productId].id }}">Já na loja</a>
+{% elif needs %}<span class="small muted">não suportado</span>
+{% else %}<a class="btn sm" href="/produtos/novo?fornecedor={{ s.id }}&sku={{ x.productId|urlencode }}&nome={{ x.name|urlencode }}&desc={{ (x.description or '')[:700]|urlencode }}&obs={{ ('Preço no fornecedor: ' ~ (x.price.text if x.price else ''))|urlencode }}">Vender na loja</a>{% endif %}</td></tr>
+{% else %}{% if not erro %}<tr><td colspan="6" class="muted">O fornecedor não retornou produtos.</td></tr>{% endif %}{% endfor %}
+</table></div></div>
+{% endblock %}

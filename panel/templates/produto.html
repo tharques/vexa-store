@@ -3,10 +3,10 @@
 {% block actions %}<a class="btn ghost" href="/produtos">‹ Produtos</a>{% endblock %}
 {% block body %}
 <div class="grid g2" style="align-items:start">
-<form class="card" method="post" action="/produtos/salvar" x-data="{mode:'{{ (p.delivery_mode if p else 'estoque') or 'estoque' }}', price:{{ p.price if p else 0 }}, cost:{{ (p.cost or 0) if p else 0 }}}">
+<form class="card" method="post" action="/produtos/salvar" x-data="{mode:'{{ (p.delivery_mode if p else ('api' if pre.supplier_id else 'estoque')) or 'estoque' }}', price:{{ p.price if p else 0 }}, cost:{{ (p.cost or 0) if p else 0 }}}">
 {{ csrf() }}{% if p %}<input type="hidden" name="id" value="{{ p.id }}">{% endif %}
 <h2>Dados do produto</h2>
-<div class="f"><label>Nome</label><input name="name" value="{{ p.name if p else '' }}" required maxlength="120"></div>
+<div class="f"><label>Nome</label><input name="name" value="{{ p.name if p else pre.name }}" required maxlength="120"></div>
 <div class="row f"><div><label>Categoria</label><select name="category_id" required><option value="">—</option>
 {% for c in cats %}<option value="{{ c.id }}" {{ 'selected' if p and p.category_id == c.id }}>{{ c.emoji }} {{ c.name }}</option>{% endfor %}</select></div>
 <div style="max-width:110px"><label>Ordem</label><input type="number" name="sort" value="{{ p.sort if p and p.sort else 0 }}"></div></div>
@@ -15,7 +15,7 @@
 <div><label>Preço antigo (riscado)</label><input name="old_price" inputmode="decimal" value="{{ ('%.2f'|format(p.old_price)).replace('.', ',') if p and p.old_price else '' }}"></div>
 <div><label>Custo (R$)</label><input name="cost" inputmode="decimal" value="{{ ('%.2f'|format(p.cost)).replace('.', ',') if p and p.cost else '' }}" x-on:input="cost=parseFloat($event.target.value.replace(',','.'))||0"></div></div>
 <p class="small" style="margin-top:-4px">Margem: <b x-text="price ? ((price-cost)/price*100).toFixed(1).replace('.',',')+'%  ·  R$ '+(price-cost).toFixed(2).replace('.',',')+' por unidade' : '—'"></b></p>
-<div class="f"><label>Descrição (aparece no bot)</label><textarea name="description" maxlength="800">{{ p.description if p else '' }}</textarea></div>
+<div class="f"><label>Descrição (aparece no bot)</label><textarea name="description" maxlength="800">{{ p.description if p else pre.description }}</textarea></div>
 <div class="row f"><div><label>Garantia (dias)</label><input type="number" name="warranty_days" value="{{ p.warranty_days if p else 7 }}"></div>
 <div><label>Qtd. máxima por pedido</label><input type="number" name="max_qty" value="{{ p.max_qty if p else 10 }}" min="1"></div></div>
 <div class="f"><label><input type="checkbox" name="active" {{ 'checked' if not p or p.active }}>Ativo (visível no bot)</label></div>
@@ -28,10 +28,10 @@
 <p class="small muted" x-show="mode=='manual'">Vai para a Fila manual; você cola a entrega no painel.</p></div>
 <div class="f" x-show="mode=='estoque'"><label>Conteúdo ilimitado (opcional)</label><input name="unlimited" value="{{ p.unlimited if p and p.unlimited else '' }}" placeholder="ex.: link do arquivo — mesma entrega para todos"></div>
 <div class="row f" x-show="mode!='estoque'"><div><label>Fornecedor</label><select name="supplier_id"><option value="">—</option>
-{% for s in sups %}<option value="{{ s.id }}" {{ 'selected' if p and p.supplier_id == s.id }}>{{ s.name }} ({{ s.kind }})</option>{% endfor %}</select></div>
-<div><label>SKU no fornecedor</label><input name="sku" value="{{ p.sku if p and p.sku else '' }}"></div></div>
+{% for s in sups %}<option value="{{ s.id }}" {{ 'selected' if (p and p.supplier_id == s.id) or (not p and pre.supplier_id == s.id) }}>{{ s.name }} ({{ s.kind }})</option>{% endfor %}</select></div>
+<div><label>SKU no fornecedor</label><input name="sku" value="{{ p.sku if p and p.sku else pre.sku or '' }}"></div></div>
 <div class="f"><label>Link de referência</label><input name="ref_link" value="{{ p.ref_link if p and p.ref_link else '' }}" placeholder="https://..."></div>
-<div class="f"><label>Observações internas</label><textarea name="notes" style="min-height:60px">{{ p.notes if p and p.notes else '' }}</textarea></div>
+<div class="f"><label>Observações internas</label><textarea name="notes" style="min-height:60px">{{ p.notes if p and p.notes else pre.notes or '' }}</textarea></div>
 <button class="btn grad">Salvar produto</button></form>
 
 <div>

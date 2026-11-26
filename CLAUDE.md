@@ -19,6 +19,11 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
   3 tentativas, `Idempotency-Key` = código do pedido), **webhook** (POST com HMAC-SHA256 em `X-Vexa-Signature`;
   retorno em `POST /webhook/{id}` do painel) e **manual** (fila manual). Falhou → estorno automático em saldo + avisos.
   Log do fornecedor fica no pedido sem segredos (`redact`).
+  Tipo **buyer** ("API de revenda", padrão Buyer API): config = domínio + prefixo (`/api/v2/telegram-buyer`) + nome da
+  chave (`SUP_<NOME>` no ENV_FILE). Painel lista catálogo/saldo do fornecedor e importa produto ("Vender na loja").
+  Compra: POST /purchase com `Idempotency-Key: vexa-<código>`, entrega em `delivery` (accounts/codes…) formatada em
+  linhas; 429 respeita Retry-After, 409/400/401/404 não repetem → estorno; status `paid` sem entrega → fila manual;
+  aviso de saldo baixo no fornecedor (`min_balance`). Credenciais entregues nunca vão para o log.
 - `bot/store.py` — configurações editáveis no painel (tabela `settings`): nome, @suporte, % indicação, expiração,
   Pix/USDT on/off, prazo manual, textos do bot. O bot recarrega a cada ciclo.
 - `bot/db.py` — schema + migrações. `repo.credit/debit` movimentam saldo **sempre** com registro em `ledger`
@@ -41,7 +46,7 @@ Pagamento: **Pix (Asaas)**, **USDT (Binance Pay Merchant)** e **saldo em carteir
   limites 5 por IP e usuário+IP e 20 por usuário (exceto IPs onde o usuário já entrou), aviso de bloqueio no Telegram,
   CSP/HSTS, JS local em `panel/static/vendor`, SSRF bloqueado em fornecedores, estorno desfaz comissão.
 - `bot/asaas.py` (Pix + `received()` para conferência), `bot/binance_pay.py` (USDT), `bot/ui.py` (identidade).
-- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 184 checagens (inclui ataques: callback forjado, rajada de login, XFF, SSRF, HTML). Roda no CI
+- `python -m tests.sim` — simulação ponta a ponta (bot + painel + fornecedor falso local): 197 checagens (inclui ataques: callback forjado, rajada de login, XFF, SSRF, HTML). Roda no CI
   antes do deploy; rode sempre após mudar bot ou painel.
 
 ## Funcionalidades prontas (testadas ponta a ponta no Telegram em 24/11/2026, em SANDBOX)

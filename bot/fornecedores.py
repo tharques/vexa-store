@@ -203,6 +203,14 @@ async def test(sup):
     c = conf(sup)
     if sup["kind"] == "manual":
         return True, "Fornecedor manual: nada a testar."
+    if sup["kind"] == "buyer":
+        try:
+            b = await buyer_balance(sup)
+            return True, f"Chave válida. Saldo no fornecedor: {b.get('balanceText') or b.get('balance')}."
+        except SupplierError as e:
+            return False, str(e)
+        except Exception as e:
+            return False, f"Sem resposta: {type(e).__name__}."
     url = fill(c.get("url"), {"sku": "TESTE", "qtd": 1, "pedido": "TESTE"})
     if not public_url(url):
         return False, "URL inválida ou interna (bloqueada)."
@@ -213,3 +221,141 @@ async def test(sup):
                 return r.status < 500, f"Respondeu HTTP {r.status}."
     except Exception as e:
         return False, f"Sem resposta: {type(e).__name__}."
+
+
+# ───────────────────────── API de revenda (padrão "Buyer API") ─────────────────────────
+# Formato comum entre fornecedores: GET {base}{prefixo}/products|balance?key=..., POST {prefixo}/purchase
+# com {"key","product_id","quantity"} + Idempotency-Key, entrega em "delivery". Config no painel:
+# {"url": base, "prefix": "/api/v2/telegram-buyer", "key_secret": "FORN1", "min_balance": 0, "timeout": 25}
+BUYER_PREFIX = "/api/v2/telegram-buyer"
+LABELS = {"user": "login", "username": "login", "login": "login", "email": "e-mail", "password": "senha",
+          "pass": "senha", "verifyEmail": "e-mail de recuperação", "code": "código", "key": "código",
+          "license": "licença", "link": "link", "pin": "PIN", "note": "obs."}
+
+
+class SupplierPending(Exception):
+    """Fornecedor aceitou e cobrou, mas a entrega é manual do lado dele (vai para a fila manual)."""
+
+
+def _buyer(sup):
+    c = conf(sup)
+    base = (c.get("url") or "").rstrip("/") + (c.get("prefix") or BUYER_PREFIX)
+    return c, base, _secret(c.get("key_secret") or "")
+
+
+def _fmt_item(it):
+    if isinstance(it, dict):
+        parts = [f"{LABELS.get(k, k)}: {v}" for k, v in it.items() if v not in (None, "", [], {})]
+        return " | ".join(parts)
+    return str(it).strip()
+
+
+def buyer_items(delivery):
+    """Normaliza a entrega (accounts, codes, keys, items… ou lista simples) em linhas de texto."""
+    if not delivery:
+        return []
+    if isinstance(delivery, (list, tuple)):
+        return [x for x in (_fmt_item(i) for i in delivery) if x]
+    if isinstance(delivery, dict):
+        out = []
+        for v in delivery.values():
+            if isinstance(v, (list, tuple)):
+                out += [x for x in (_fmt_item(i) for i in v) if x]
+            elif isinstance(v, str) and v.strip():
+                out.append(v.strip())
+        return out
+    return [str(delivery)]
+
+
+async def _buyer_get(sup, path):
+    c, base, key = _buyer(sup)
+    if not key:
+        raise SupplierError(f"chave não cadastrada (SUP_{(c.get('key_secret') or 'NOME').upper()} no ENV_FILE)")
+    if not public_url(base):
+        raise SupplierError("URL do fornecedor inválida ou interna")
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=float(c.get("timeout") or 25))) as s:
+        async with s.get(f"{base}/{path}", params={"key": key}, headers={"User-Agent": UA, "x-buyer-key": key},
+                         allow_redirects=False) as r:
+            try:
+                data = await r.json(content_type=None)
+            except Exception:
+                data = {}
+            if r.status >= 400 or not data.get("success", False):
+                raise SupplierError(f"HTTP {r.status}: {redact((data or {}).get('message', ''), c)[:200]}")
+            return data
+
+
+async def buyer_products(sup):
+    return (await _buyer_get(sup, "products")).get("products", [])
+
+
+async def buyer_balance(sup):
+    return await _buyer_get(sup, "balance")
+
+
+async def buyer_purchase(sup, sku, qty, code, log):
+    """Compra no fornecedor. Devolve (itens, info). Respeita Retry-After; idempotente pelo código do pedido."""
+    c, base, key = _buyer(sup)
+    if not key:
+        raise SupplierError(f"chave não cadastrada (SUP_{(c.get('key_secret') or 'NOME').upper()} no ENV_FILE)")
+    if not public_url(base):
+        raise SupplierError("URL do fornecedor inválida ou interna")
+    body = {"key": key, "product_id": sku, "quantity": qty}
+    headers = {"Idempotency-Key": f"vexa-{code}", "x-buyer-key": key, "User-Agent": UA}
+    timeout = aiohttp.ClientTimeout(total=float(c.get("timeout") or 25))
+    last = ""
+    for attempt in range(1, 4):
+        wait = RETRY_WAIT[attempt - 1] if attempt < 3 else 0
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.post(f"{base}/purchase", json=body, headers=headers, allow_redirects=False) as r:
+                    text = await r.text()
+                    try:
+                        data = json.loads(text)
+                    except ValueError:
+                        data = {}
+                    msg = redact(str(data.get("message", "")), c)[:200]
+                    # nunca grava credenciais entregues no log: só status e mensagem
+                    log(f"tentativa {attempt}: HTTP {r.status}" + (f" · {msg}" if msg else ""))
+                    if r.status == 200 and data.get("success"):
+                        order = data.get("order") or {}
+                        pay = data.get("payment") or {}
+                        info = {"supplier_order": order.get("orderCode"), "status": order.get("status"),
+                                "amount": pay.get("amountText") or pay.get("amount"),
+                                "balance": pay.get("balance"), "balance_text": pay.get("balanceText")}
+                        log(f"pedido no fornecedor {info['supplier_order']} · {info['status']} · pago {info['amount']}"
+                            f" · saldo restante {info['balance_text'] or info['balance']}")
+                        items = buyer_items(data.get("delivery"))
+                        if len(items) >= qty:
+                            return items, info
+                        if str(order.get("status", "")).lower() in ("paid", "processing", "pending", "in_progress"):
+                            raise SupplierPending(info["supplier_order"] or "")
+                        raise SupplierError("fornecedor confirmou mas não entregou os itens")
+                    if r.status == 429:
+                        ra = int(r.headers.get("Retry-After", "0") or 0)
+                        last = f"limite de requisições do fornecedor (aguardar {ra}s)"
+                        if ra > 15:
+                            break
+                        wait = max(wait, ra)
+                    elif r.status == 401:
+                        last = "chave do fornecedor inválida"
+                        break
+                    elif r.status == 400:
+                        last = "saldo insuficiente no fornecedor" if "balance" in msg.lower() or "saldo" in msg.lower() else (msg or "pedido inválido")
+                        break
+                    elif r.status == 404:
+                        last = "produto não encontrado no fornecedor (confira o SKU)"
+                        break
+                    elif r.status == 409:
+                        last = msg or "conflito no fornecedor"
+                        if "progress" not in msg.lower():
+                            break  # sem estoque no fornecedor: não adianta repetir
+                        wait = max(wait, 3)
+                    else:
+                        last = f"HTTP {r.status}"
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            last = type(e).__name__
+            log(f"tentativa {attempt}: {last}")
+        if attempt < 3:
+            await asyncio.sleep(wait)
+    raise SupplierError(last or "falha no fornecedor")

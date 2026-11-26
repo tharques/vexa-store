@@ -1,26 +1,37 @@
 {% extends "base.html" %}{% block title %}{{ s.name if s else 'Novo fornecedor' }}{% endblock %}
 {% block h1 %}{{ s.name if s else 'Novo fornecedor' }}{% endblock %}
 {% block actions %}<a class="btn ghost" href="/fornecedores">‹ Fornecedores</a>
+{% if s and s.kind == 'buyer' %}<a class="btn ghost" href="/fornecedores/{{ s.id }}/produtos">Produtos do fornecedor</a>{% endif %}
 {% if s %}<form method="post" action="/fornecedores/{{ s.id }}/testar">{{ csrf() }}<button class="btn">Testar conexão</button></form>{% endif %}{% endblock %}
 {% block body %}
 <form class="card" method="post" action="/fornecedores/salvar" x-data="{kind:'{{ s.kind if s else 'manual' }}'}" style="max-width:760px">
 {{ csrf() }}{% if s %}<input type="hidden" name="id" value="{{ s.id }}">{% endif %}
 <div class="row f"><div><label>Nome</label><input name="name" value="{{ s.name if s else '' }}" required></div>
-<div><label>Tipo</label><select name="kind" x-model="kind"><option value="api">API</option><option value="webhook">Webhook</option><option value="manual">Manual</option></select></div></div>
+<div><label>Tipo</label><select name="kind" x-model="kind"><option value="buyer">API de revenda (padrão Buyer API)</option><option value="api">API personalizada</option><option value="webhook">Webhook</option><option value="manual">Manual</option></select></div></div>
 <div class="row f"><div><label>Link</label><input name="link" value="{{ s.link if s else '' }}" placeholder="https://"></div>
 <div><label>Contato</label><input name="contact" value="{{ s.contact if s else '' }}" placeholder="@telegram, e-mail, WhatsApp"></div></div>
 <div class="f"><label>Observações</label><textarea name="notes" style="min-height:60px">{{ s.notes if s else '' }}</textarea></div>
 <div class="f"><label><input type="checkbox" name="active" {{ 'checked' if not s or s.active }}>Ativo</label></div>
 
+<div x-show="kind=='buyer'"><h2>API de revenda</h2>
+<p class="small muted">Para fornecedores no padrão “Buyer API” (listar produtos, saldo e compra com a sua chave de comprador).
+O painel puxa o catálogo deles e o bot compra sozinho a cada venda, pagando com o seu saldo lá.</p>
+<div class="f"><label>Endereço do fornecedor (só o domínio)</label><input name="url" value="{{ c.url or '' }}" placeholder="https://api.fornecedor.com" :disabled="kind!='buyer'"></div>
+<div class="row f"><div><label>Nome da chave</label><input name="key_secret" value="{{ c.key_secret or '' }}" placeholder="FORN1" style="text-transform:uppercase" :disabled="kind!='buyer'"></div>
+<div><label>Caminho da API</label><input name="prefix" value="{{ c.prefix or '/api/v2/telegram-buyer' }}" :disabled="kind!='buyer'"></div></div>
+<p class="small muted" style="margin-top:-6px">A chave nunca fica no painel: no GitHub, adicione ao secret ENV_FILE a linha <code>SUP_{{ (c.key_secret or 'FORN1')|upper }}=sua_chave_tgb_...</code></p>
+<div class="row f"><div><label>Avisar quando o saldo lá ficar abaixo de</label><input name="min_balance" value="{{ c.min_balance or '' }}" inputmode="decimal" placeholder="0" :disabled="kind!='buyer'"></div>
+<div style="max-width:140px"><label>Timeout (s)</label><input name="timeout" value="{{ c.timeout or 25 }}" :disabled="kind!='buyer'"></div></div></div>
+
 <div x-show="kind=='api'"><h2>Conector de API</h2>
-<div class="row f"><div style="max-width:120px"><label>Método</label><select name="method">{% for m in ['POST','GET','PUT'] %}<option {{ 'selected' if c.method == m }}>{{ m }}</option>{% endfor %}</select></div>
-<div><label>URL</label><input name="url" value="{{ c.url or '' }}" placeholder="https://api.fornecedor.com/v1/orders"></div></div>
+<div class="row f"><div style="max-width:120px"><label>Método</label><select name="method" :disabled="kind!='api'">{% for m in ['POST','GET','PUT'] %}<option {{ 'selected' if c.method == m }}>{{ m }}</option>{% endfor %}</select></div>
+<div><label>URL</label><input name="url" value="{{ c.url or '' }}" placeholder="https://api.fornecedor.com/v1/orders" :disabled="kind!='api'"></div></div>
 <div class="f"><label>Headers (JSON)</label><textarea name="headers" class="mono" style="min-height:80px">{{ headers }}</textarea>
 <p class="small muted">Chaves nunca ficam no painel: use <code>{secret:FORN1}</code> e adicione <code>SUP_FORN1=sua-chave</code> no ENV_FILE.</p></div>
 <div class="f"><label>Corpo (JSON com placeholders)</label><textarea name="body" class="mono" placeholder='{"product": "{sku}", "quantity": {qtd}, "reference": "{pedido}"}'>{{ c.body or '' }}</textarea>
 <p class="small muted">Placeholders: <code>{sku}</code> <code>{qtd}</code> <code>{pedido}</code>. O código do pedido também vai no header <code>Idempotency-Key</code>.</p></div>
 <div class="row f"><div><label>Caminho do código na resposta</label><input name="path" value="{{ c.path or '' }}" placeholder="data.codes  ou  items[*].key"></div>
-<div style="max-width:140px"><label>Timeout (s)</label><input name="timeout" value="{{ c.timeout or 20 }}"></div></div></div>
+<div style="max-width:140px"><label>Timeout (s)</label><input name="timeout" value="{{ c.timeout or 20 }}" :disabled="kind!='api'"></div></div></div>
 
 <div x-show="kind=='webhook'"><h2>Webhook</h2>
 <div class="row f"><div><label>URL que recebe o pedido</label><input name="url" value="{{ c.url or '' }}" placeholder="https://seu-servidor/pedidos" :disabled="kind!='webhook'"></div>

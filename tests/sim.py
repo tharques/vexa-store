@@ -359,7 +359,44 @@ import html as _html
 async def fake_supplier():
     """Fornecedor de mentira: /ok entrega códigos, /fail sempre 500, /hook recebe webhook assinado."""
     from aiohttp import web
-    calls = {"ok": [], "fail": 0, "hook": []}
+    calls = {"ok": [], "fail": 0, "hook": [], "buy": [], "rl": 0}
+    BK = "tgb_chave_teste_123"
+    BP = "/buyer/api/v2/telegram-buyer"
+
+    async def b_products(req):
+        if req.query.get("key") != BK:
+            return web.json_response({"success": False, "message": "Invalid API key"}, status=401)
+        return web.json_response({"success": True, "walletCurrency": "VND", "products": [
+            {"productId": "P1", "name": "Gift Card Teste", "description": "Cartão de teste", "productType": "account",
+             "price": {"amount": 50000, "currency": "VND", "text": "50.000 ₫"}, "availability": {"available": 60, "sold": 40},
+             "promotions": [{"type": "bulk_discount", "minQty": 3, "percent": 10, "bonusQty": 1}]},
+            {"productId": "P-EMAIL", "name": "Vaga com e-mail", "productType": "slot", "price": {"text": "10 ₫"},
+             "availability": {"available": 5, "sold": 0}, "promotions": [], "purchaseRequirements": {"customerEmail": True}}]})
+
+    async def b_balance(req):
+        if req.query.get("key") != BK:
+            return web.json_response({"success": False, "message": "Invalid API key"}, status=401)
+        return web.json_response({"success": True, "walletCurrency": "VND", "balance": 250000, "balanceText": "250.000 ₫"})
+
+    async def b_purchase(req):
+        b = await req.json()
+        calls["buy"].append({"idem": req.headers.get("Idempotency-Key"), **b})
+        if b.get("key") != BK:
+            return web.json_response({"success": False, "message": "Invalid API key"}, status=401)
+        pid, q = b["product_id"], int(b.get("quantity", 1))
+        if pid == "P-OOS":
+            return web.json_response({"success": False, "message": "Inventory not enough"}, status=409)
+        if pid == "P-NOBAL":
+            return web.json_response({"success": False, "message": "Wallet balance is not enough"}, status=400)
+        if pid == "P-RL":
+            calls["rl"] += 1
+            if calls["rl"] == 1:
+                return web.json_response({"success": False, "code": "RATE_LIMITED"}, status=429, headers={"Retry-After": "0"})
+        order = {"orderCode": "SUP" + b["product_id"], "status": "paid" if pid == "P-MAN" else "completed", "quantity": q}
+        pay = {"amount": 50000 * q, "amountText": f"VND {50000 * q}", "balance": 1000, "balanceText": "1.000 ₫"}
+        delivery = None if pid == "P-MAN" else {"accounts": [
+            {"user": f"conta{i}@exemplo.com", "password": f"senha<{i}>", "verifyEmail": "rec@exemplo.com"} for i in range(q)]}
+        return web.json_response({"success": True, "order": order, "payment": pay, "delivery": delivery})
 
     async def ping(req):
         return web.json_response({"ok": True})
@@ -381,7 +418,8 @@ async def fake_supplier():
         return web.json_response({"ok": True})
 
     app = web.Application()
-    app.add_routes([web.post("/ok", ok), web.post("/fail", fail), web.post("/hook", hook), web.get("/ok", ping)])
+    app.add_routes([web.get(BP + "/products", b_products), web.get(BP + "/balance", b_balance),
+                    web.post(BP + "/purchase", b_purchase), web.post("/ok", ok), web.post("/fail", fail), web.post("/hook", hook), web.get("/ok", ping)])
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -600,6 +638,58 @@ async def painel_e_fornecedores(adm, ana):
     check("ajuste de saldo aplicado", abs(await bal(120) - b0 - 4.5) < .01)
     acts = {a["action"] for a in await M.repo.q("SELECT action FROM audit")}
     check("auditoria registra preço/estoque/estorno/saldo", {"criou produto", "repôs estoque", "estornou em saldo", "ajustou saldo"} <= acts, acts)
+
+
+    # ── API de revenda (padrão Buyer API) ──
+    os.environ["SUP_BUY1"] = "tgb_chave_teste_123"
+    await post("/fornecedores/salvar", name="Revenda", kind="buyer", url=base + "/buyer", key_secret="buy1",
+               prefix="/api/v2/telegram-buyer", min_balance="5000", timeout="5", active="1")
+    sb = await M.repo.one("SELECT * FROM suppliers WHERE name='Revenda'")
+    check("buyer: fornecedor salvo com chave por nome (sem a chave no banco)",
+          sb and forn.conf(sb)["key_secret"] == "BUY1" and "tgb_" not in sb["config"])
+    r = await post(f"/fornecedores/{sb['id']}/testar")
+    check("buyer: testar conexão mostra o saldo", "250.000" in _html.unescape(__import__("urllib.parse").parse.unquote(r.headers.get("location", ""))))
+    r = await H.get(f"/fornecedores/{sb['id']}/produtos")
+    check("buyer: catálogo do fornecedor no painel", r.status_code == 200 and "Gift Card Teste" in r.text and "250.000" in r.text
+          and "exige dados do cliente" in r.text and "Vender na loja" in r.text)
+    r = await H.get(f"/produtos/novo?fornecedor={sb['id']}&sku=P1&nome=Gift%20Card%20Teste")
+    check("buyer: 'Vender na loja' abre o produto já preenchido", 'value="P1"' in r.text and "Gift Card Teste" in r.text
+          and "mode:'api'" in r.text)
+    async def comprar_id(pid, qty=1):
+        await cli.click("x", data=f"buy:{pid}:{qty}"); await cli.click("Saldo")
+        return await M.repo.one("SELECT * FROM orders WHERE user_id=120 ORDER BY id DESC")
+
+    pb = {}
+    for sku in ("P1", "P-OOS", "P-RL", "P-MAN", "P-NOBAL"):
+        await post("/produtos/salvar", name=f"Rev {sku}", category_id=str(cat["id"]), price="20", cost="9", warranty_days="7",
+                   max_qty="5", active="1", delivery_mode="api", supplier_id=str(sb["id"]), sku=sku)
+        pb[sku] = await M.repo.one("SELECT * FROM products WHERE name=?", f"Rev {sku}")
+    n_adm = len(tg.chats[ADMIN])
+    o = await comprar_id(pb["P1"]["id"], 2)
+    check("buyer: compra entrega login e senha formatados", o["status"] == "delivered" and last_text(120).count("login: conta") == 2
+          and "senha: senha&lt;1&gt;" in last_text(120), last_text(120)[:300])
+    check("buyer: Idempotency-Key pelo código do pedido", calls["buy"][-1]["idem"] == f"vexa-{o['code']}" and calls["buy"][-1]["quantity"] == 2)
+    check("buyer: log do pedido sem senha nem chave", "senha" not in o["supplier_log"] and "tgb_" not in o["supplier_log"]
+          and "SUPP1" in o["supplier_log"], o["supplier_log"])
+    check("buyer: avisa saldo baixo no fornecedor", any("Saldo baixo no fornecedor" in m["text"] for m in tg.chats[ADMIN][n_adm:]))
+    nb = len(calls["buy"]); b0 = await bal(120)
+    o = await comprar_id(pb["P-OOS"]["id"])
+    check("buyer: sem estoque lá → estorno sem ficar repetindo", o["status"] == "refunded" and len(calls["buy"]) - nb == 1
+          and abs(await bal(120) - b0) < .01)
+    o = await comprar_id(pb["P-RL"]["id"])
+    check("buyer: respeita limite (429) e conclui", o["status"] == "delivered" and calls["rl"] == 2)
+    n_adm = len(tg.chats[ADMIN])
+    o = await comprar_id(pb["P-MAN"]["id"])
+    check("buyer: fornecedor com conclusão manual → fila manual, sem estorno", o["status"] == "manual"
+          and any("vai concluir" in m["text"] for m in tg.chats[ADMIN][n_adm:]))
+    n_adm = len(tg.chats[ADMIN])
+    o = await comprar_id(pb["P-NOBAL"]["id"])
+    check("buyer: sem saldo lá → estorno e aviso", o["status"] == "refunded"
+          and any("saldo insuficiente no fornecedor" in m["text"] for m in tg.chats[ADMIN][n_adm:]))
+    os.environ["SUP_BUY1"] = "errada"
+    r = await post(f"/fornecedores/{sb['id']}/testar")
+    check("buyer: chave errada é detectada no teste", "err=" in r.headers.get("location", ""))
+    os.environ["SUP_BUY1"] = "tgb_chave_teste_123"
 
     # ── chamado respondido pelo painel, cliente responde no bot ──
     t = await M.repo.one("SELECT * FROM tickets WHERE user_id=100 ORDER BY id DESC")

@@ -4,6 +4,7 @@ Rodar: uvicorn panel.app:app --host 0.0.0.0 --port 8000 --proxy-headers --forwar
 """
 import asyncio
 import csv
+import re
 from html import escape as html_esc
 import hmac
 import io
@@ -462,10 +463,14 @@ async def produto(request: Request, pid: str):
             go("/produtos", err="Produto não encontrado.")
     cats = await R().q("SELECT * FROM categories ORDER BY sort, name")
     sups = await R().q("SELECT * FROM suppliers ORDER BY name")
+    qp = request.query_params
+    pre = {"name": qp.get("nome", "")[:120], "sku": qp.get("sku", "")[:200], "description": qp.get("desc", "")[:800],
+           "supplier_id": int(qp["fornecedor"]) if qp.get("fornecedor", "").isdigit() else None,
+           "notes": qp.get("obs", "")[:500]} if not p else {}
     st = None
     if p:
         st = await R().one("SELECT SUM(sold=0) disp, SUM(sold=1) vend FROM stock WHERE product_id=?", p["id"])
-    return await render(request, "produto.html", u, p=p, cats=cats, sups=sups, st=st)
+    return await render(request, "produto.html", u, p=p, cats=cats, sups=sups, st=st, pre=pre)
 
 
 @app.post("/produtos/salvar")
@@ -587,7 +592,7 @@ async def fornecedor_save(request: Request):
     u = await guard(request)
     f = await form(request, u)
     sid = f.get("id")
-    kind = str(f.get("kind")) if f.get("kind") in ("api", "webhook", "manual") else "manual"
+    kind = str(f.get("kind")) if f.get("kind") in ("api", "buyer", "webhook", "manual") else "manual"
     old = await R().one("SELECT * FROM suppliers WHERE id=?", int(sid)) if sid else None
     oldc = forn.conf(old) if old else {}
     try:
@@ -597,7 +602,13 @@ async def fornecedor_save(request: Request):
         go(f"/fornecedores/{sid or 'novo'}", err="Headers precisam ser um JSON de objeto, ex.: {\"Authorization\": \"Bearer {secret:FORN1}\"}")
     c = {"url": str(f.get("url", "")).strip(), "method": str(f.get("method") or "POST").upper(), "headers": headers,
          "body": str(f.get("body", "")), "path": str(f.get("path", "")).strip(), "timeout": num(f.get("timeout"), 20) or 20}
-    if kind in ("api", "webhook") and not forn.public_url(c["url"]):
+    if kind == "buyer":
+        ks = re.sub(r"[^A-Z0-9_]", "", str(f.get("key_secret", "")).upper().removeprefix("SUP_"))[:40]
+        if not ks:
+            go(f"/fornecedores/{sid or 'novo'}", err="Informe o nome da chave (ex.: FORN1) e cadastre SUP_FORN1 no ENV_FILE.")
+        c = {"url": c["url"].rstrip("/"), "prefix": "/" + str(f.get("prefix") or forn.BUYER_PREFIX).strip().strip("/"),
+             "key_secret": ks, "min_balance": num(f.get("min_balance"), 0), "timeout": num(f.get("timeout"), 25) or 25}
+    if kind in ("api", "buyer", "webhook") and not forn.public_url(c["url"]):
         go(f"/fornecedores/{sid or 'novo'}", err="URL precisa ser https/http pública (endereços internos são bloqueados).")
     if kind == "webhook":
         c["secret"] = oldc.get("secret") or secrets.token_hex(24)
@@ -616,6 +627,23 @@ async def fornecedor_save(request: Request):
         sid = await R().x("INSERT INTO suppliers(name,kind,config,link,contact,notes,active) VALUES(?,?,?,?,?,?,?)", *vals)
         await audit(request, u, "criou fornecedor", "suppliers", sid, {"nome": vals[0], "tipo": kind})
     go(f"/fornecedores/{sid}", "Fornecedor salvo.")
+
+
+@app.get("/fornecedores/{sid}/produtos", response_class=HTMLResponse)
+async def fornecedor_produtos(request: Request, sid: int):
+    """Catálogo do fornecedor (padrão Buyer API) para escolher o que revender."""
+    u = await guard(request)
+    s = await R().one("SELECT * FROM suppliers WHERE id=? AND kind='buyer'", sid)
+    if not s:
+        go("/fornecedores", err="Fornecedor não encontrado ou não é do tipo API de revenda.")
+    prods, bal, erro = [], None, None
+    try:
+        prods = await forn.buyer_products(s)
+        bal = await forn.buyer_balance(s)
+    except Exception as e:
+        erro = str(e) if isinstance(e, forn.SupplierError) else f"Sem resposta ({type(e).__name__})"
+    mine = {r["sku"]: r for r in await R().q("SELECT id, sku, name, price, active FROM products WHERE supplier_id=?", sid)}
+    return await render(request, "fornecedor_produtos.html", u, s=s, prods=prods, bal=bal, erro=erro, mine=mine)
 
 
 @app.post("/fornecedores/{sid}/testar")
