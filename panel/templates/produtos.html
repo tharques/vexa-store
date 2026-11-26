@@ -2,6 +2,9 @@
 {% block actions %}<a class="btn grad" href="/produtos/novo">+ Novo produto</a>{% endblock %}
 {% block body %}
 <div class="card"><h2>Categorias</h2>
+<p class="small muted" style="margin-top:-6px">São as “prateleiras” do bot: o cliente toca em <b>Explorar catálogo</b> e vê estes botões.
+Crie as categorias primeiro e depois os produtos dentro delas. <b>Ordem</b>: menor número aparece primeiro.
+<b>Emoji</b>: ícone ao lado do nome no botão (opcional). Categoria sem produto ativo não aparece para o cliente.</p>
 <div class="tw"><table><tr><th>Ordem</th><th>Emoji</th><th>Nome</th><th>Produtos</th><th></th></tr>
 {% for c in cats %}<tr x-data="{e:false}">
 <td x-show="!e">{{ c.sort }}</td><td x-show="!e">{{ c.emoji }}</td><td x-show="!e">{{ c.name }}</td><td x-show="!e">{{ c.n }}</td>
@@ -15,8 +18,8 @@
 </tr>{% endfor %}</table></div>
 <form method="post" action="/categorias/salvar" class="row" style="margin-top:12px">{{ csrf() }}
 <div style="max-width:90px"><label>Ordem</label><input name="sort" type="number" value="0"></div>
-<div style="max-width:90px"><label>Emoji</label><input name="emoji" placeholder="🎬"></div>
-<div><label>Nova categoria</label><input name="name" placeholder="Nome" required></div>
+<div style="max-width:90px"><label>Emoji</label><input name="emoji" placeholder="ex.: 🎁"></div>
+<div><label>Nova categoria</label><input name="name" placeholder="ex.: Gift Cards" required></div>
 <div style="flex:0"><button class="btn">Criar</button></div></form></div>
 
 <div class="card"><h2>Produtos</h2><div class="tw"><table>
