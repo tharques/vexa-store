@@ -41,42 +41,44 @@ jobs:
               echo "::warning::Portas 80/443 já em uso na VPS por outro serviço. Caddy NÃO foi iniciado; nada foi derrubado."
               ss -ltnp '( sport = :80 or sport = :443 )' | sed -E 's/pid=[0-9]+,//g' || true
               docker compose up -d --build vexa painel 2>&1 | grep -v 'variable is not set' || true
-              # 80/443 são do Caddy do Gestor (container). Aprovado pelo dono em 25/11/2026: acha o Caddyfile montado
-              # no host e só ACRESCENTA o site do painel. Backup, valida, recarrega sem derrubar; se falhar, restaura.
+              # 80/443 são de um Caddy do Gestor que roda isolado (outro namespace: o arquivo não aparece no host).
+              # Aprovado pelo dono em 25/11/2026: acessa o Caddyfile pelo /proc do processo, só ACRESCENTA o site do
+              # painel, confere a sintaxe e recarrega pela API do Caddy (sem reiniciar). Falhou -> restaura o backup.
               DOMAIN="${PANEL_DOMAIN:-vexa.traxor.pro}"; PPORT="${PANEL_PORT:-18080}"
-              CID=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' | awk '($2 ~ /caddy/ || $3 ~ /caddy/) && $3 !~ /^vexa-/ {print $1; exit}')
-              if [ -n "$CID" ]; then
-                CNAME=$(docker inspect -f '{{.Name}}' "$CID"); NET=$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$CID")
-                SRC=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}' "$CID")
-                if [ -z "$SRC" ]; then
-                  D=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy"}}{{.Source}}{{end}}{{end}}' "$CID")
-                  [ -n "$D" ] && SRC="$D/Caddyfile"
-                fi
-                echo "Caddy do Gestor: container $CNAME · rede $NET · Caddyfile no host: ${SRC:-não montado}"
-                if [ "$NET" = "host" ]; then UP="127.0.0.1:$PPORT"; else
-                  docker network connect vexa_default "$CID" 2>/dev/null || true; UP="vexa-painel-1:8000"; fi
-                if [ -n "$SRC" ] && [ -f "$SRC" ]; then
-                  if grep -q "# vexa-painel" "$SRC"; then
-                    echo "Caddy do Gestor já serve $DOMAIN"
-                  else
-                    BK="$SRC.bak-vexa-$(date +%Y%m%d%H%M%S)"; cp "$SRC" "$BK"
-                    printf '\n# vexa-painel (deploy de /opt/vexa)\n%s {\n\tencode gzip\n\treverse_proxy %s\n}\n' "$DOMAIN" "$UP" >> "$SRC"
-                    if docker exec "$CID" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/tmp/vexa-caddy.log 2>&1 && \
-                       docker exec "$CID" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >>/tmp/vexa-caddy.log 2>&1; then
-                      echo "Caddy do Gestor recarregado com $DOMAIN -> $UP (backup: $BK)"
-                    else
-                      cp "$BK" "$SRC"; echo "::warning::Não deu para incluir $DOMAIN no Caddy do Gestor; arquivo original restaurado."
-                      tail -8 /tmp/vexa-caddy.log
-                    fi
-                  fi
+              PID=$(pgrep -xo caddy || true)
+              echo "---- diagnóstico do Caddy do Gestor ----"
+              if [ -n "$PID" ]; then
+                echo "pid=$PID usuário=$(ps -o user= -p $PID) cmd=$(tr '\0' ' ' < /proc/$PID/cmdline)"
+                echo "cgroup: $(head -3 /proc/$PID/cgroup | tr '\n' ' ')"
+                echo "mesma rede do host: $([ "$(readlink /proc/$PID/ns/net)" = "$(readlink /proc/1/ns/net)" ] && echo sim || echo não)"
+                echo "mesmo filesystem do host: $([ "$(readlink /proc/$PID/ns/mnt)" = "$(readlink /proc/1/ns/mnt)" ] && echo sim || echo não)"
+                systemctl status caddy --no-pager 2>/dev/null | head -4 || true
+                CFG=$(tr '\0' '\n' < /proc/$PID/cmdline | awk 'p{print;exit} $0=="--config"{p=1}')
+                CF="/proc/$PID/root${CFG:-/etc/caddy/Caddyfile}"
+                ADMIN="localhost:2019"
+                api() { if [ "$(readlink /proc/$PID/ns/net)" = "$(readlink /proc/1/ns/net)" ]; then curl -s "$@"; else nsenter -t "$PID" -n curl -s "$@"; fi; }
+                echo "config: $CFG · existe via /proc: $([ -f "$CF" ] && echo sim || echo não) · admin API: $(api -o /dev/null -w '%{http_code}' http://$ADMIN/config/ || echo off)"
+                if [ "$(readlink /proc/$PID/ns/net)" != "$(readlink /proc/1/ns/net)" ]; then
+                  echo "::warning::Caddy do Gestor está em outra rede; 127.0.0.1:$PPORT não é alcançável por ele. Nada alterado."
+                elif [ ! -f "$CF" ]; then
+                  echo "::warning::Caddyfile não encontrado nem via /proc; nada alterado."
+                elif grep -q "# vexa-painel" "$CF"; then
+                  echo "Caddy do Gestor já tem o site $DOMAIN"
                 else
-                  echo "::warning::Caddyfile do Gestor não está montado do host; nada alterado. Mounts:"
-                  docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}' "$CID"
+                  BK="/root/Caddyfile-gestor.bak-vexa-$(date +%Y%m%d%H%M%S)"; cp "$CF" "$BK"
+                  printf '\n# vexa-painel (deploy de /opt/vexa)\n%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$DOMAIN" "$PPORT" >> "$CF"
+                  CODE=$(api -o /tmp/vexa-caddy.log -w '%{http_code}' -X POST "http://$ADMIN/load" -H "Content-Type: text/caddyfile" --data-binary @"$CF" || echo 000)
+                  if [ "$CODE" = "200" ]; then
+                    echo "Caddy do Gestor recarregado com $DOMAIN -> 127.0.0.1:$PPORT (backup: $BK)"
+                  else
+                    cp "$BK" "$CF"; echo "::warning::Caddy recusou a config (HTTP $CODE); arquivo original restaurado, Gestor intacto."
+                    head -c 600 /tmp/vexa-caddy.log; echo
+                  fi
                 fi
               else
-                echo "::warning::Container do Caddy não encontrado; nada alterado."
-                docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' | head -20
+                echo "::warning::Nenhum processo caddy encontrado."
               fi
+              echo "---- fim do diagnóstico ----"
             else
               docker compose --profile https up -d --build 2>&1 | grep -v 'variable is not set' || true
             fi
